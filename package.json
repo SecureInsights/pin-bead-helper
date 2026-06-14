@@ -1,0 +1,14 @@
+{
+  "name": "pin-bead-helper",
+  "version": "0.0.0",
+  "description": "本地生成拼豆图纸、色号统计、拼豆指导和安卓 APK 的小工具。",
+  "private": false,
+  "license": "MIT",
+  "scripts": {
+    "dev": "node server.mjs",
+    "start": "node server.mjs",
+    "test": "node tests/run-tests.cjs"
+  },
+  "dependencies": {},
+  "devDependencies": {}
+}

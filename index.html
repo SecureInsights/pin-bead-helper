@@ -1,0 +1,262 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <meta name="theme-color" content="#f7f7f4" />
+    <meta
+      name="description"
+      content="拼豆小助手：本地上传图片，自动生成拼豆图纸、智能拼豆指导、色块统计和熨烫预览。"
+    />
+    <title>拼豆小助手</title>
+    <link rel="icon" href="./assets/pin-bead-icon.png" type="image/png" />
+    <link rel="manifest" href="./manifest.webmanifest" />
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <main class="app-shell">
+      <section class="sidebar" aria-label="项目设置">
+        <div class="brand">
+          <div class="brand-mark">拼</div>
+          <div>
+            <p class="eyebrow">PIN BEAD STUDIO</p>
+            <h1>拼豆小助手</h1>
+          </div>
+        </div>
+
+        <div class="drop-zone" id="dropZone">
+          <input id="imageInput" type="file" accept="image/*" />
+          <div class="drop-visual" id="dropVisual">
+            <div class="drop-grid" aria-hidden="true"></div>
+            <div>
+              <strong>上传图片生成图纸</strong>
+              <span>拖进来，或点这里选择图片</span>
+            </div>
+          </div>
+          <img id="sourcePreview" alt="已上传图片预览" hidden />
+        </div>
+
+        <section class="panel crop-panel" id="cropPanel" hidden>
+          <div class="panel-head">
+            <h2>裁剪区域</h2>
+            <button class="text-button" id="resetCropButton" type="button">全图</button>
+          </div>
+          <canvas id="cropCanvas" width="320" height="220" aria-label="图片裁剪画布"></canvas>
+          <div class="crop-actions">
+            <button class="ghost-button" id="autoCropChartButton" type="button">自动框网格</button>
+            <button class="ghost-button" id="centerCropButton" type="button">居中主体</button>
+          </div>
+        </section>
+
+        <section class="panel">
+          <div class="panel-head">
+            <h2>生成设置</h2>
+            <button class="text-button" id="suggestGridButton" type="button">自动格数</button>
+          </div>
+
+          <label class="field">
+            <span>品牌体系</span>
+            <select id="brandSelect">
+              <option value="mard">MARD / Mard</option>
+              <option value="artkal">Artkal M</option>
+            </select>
+          </label>
+
+          <label class="field">
+            <span>可用颜色</span>
+            <select id="presetSelect"></select>
+          </label>
+
+          <div class="two-fields">
+            <label class="field">
+              <span>宽</span>
+              <input id="gridWidth" type="number" min="1" max="160" value="36" />
+            </label>
+            <label class="field">
+              <span>高</span>
+              <input id="gridHeight" type="number" min="1" max="160" value="36" />
+            </label>
+          </div>
+
+          <label class="switch-row">
+            <span>
+              <strong>一键去背景</strong>
+              <small>白底 / 黑底自动识别</small>
+            </span>
+            <input id="removeBackground" type="checkbox" checked />
+          </label>
+
+          <label class="field">
+            <span>背景判断</span>
+            <select id="backgroundMode">
+              <option value="auto">自动识别</option>
+              <option value="white">白底</option>
+              <option value="black">黑底</option>
+            </select>
+          </label>
+
+          <label class="switch-row">
+            <span>
+              <strong>忽略水印干扰</strong>
+              <small>仅用于现成图纸识别，不改原图</small>
+            </span>
+            <input id="ignoreWatermark" type="checkbox" checked />
+          </label>
+
+          <button class="primary-button" id="generateButton" type="button">生成拼豆图纸</button>
+          <button class="ghost-button full-button" id="recognizeChartButton" type="button">识别现成图纸</button>
+          <p class="hint" id="statusText">全部图片只在你的浏览器本地处理。</p>
+        </section>
+
+        <section class="panel inventory-panel">
+          <div class="panel-head">
+            <h2>我的色库</h2>
+            <button class="text-button" id="selectCommonButton" type="button">常用色</button>
+          </div>
+          <p class="hint">切到“我的色库”预设时，只会用这里选中的颜色生成。</p>
+          <div class="palette-search">
+            <input id="paletteSearch" type="search" placeholder="搜索色号，例如 A9 / H6" />
+            <button class="ghost-button" id="clearInventoryButton" type="button">清空</button>
+          </div>
+          <div class="palette-grid" id="paletteGrid" aria-label="可选色号"></div>
+        </section>
+      </section>
+
+      <section class="workspace" aria-label="拼豆图纸工作区">
+        <header class="topbar">
+          <div>
+            <p class="eyebrow">LOCAL WEB APP · NO SERVER FEE</p>
+            <h2 id="projectTitle">专业图纸工作台</h2>
+          </div>
+          <div class="top-actions">
+            <button class="ghost-button" id="shareButton" type="button">分享</button>
+            <button class="dark-button" id="downloadButton" type="button">下载 PNG</button>
+          </div>
+        </header>
+
+        <nav class="tabs" aria-label="视图切换">
+          <button class="tab active" data-view="editor" type="button">图纸</button>
+          <button class="tab" data-view="guide" type="button">指导</button>
+          <button class="tab" data-view="preview" type="button">预览</button>
+          <button class="tab" data-view="library" type="button">图库</button>
+        </nav>
+
+        <section class="view active" id="editorView">
+          <div class="canvas-card">
+            <div class="canvas-toolbar">
+              <div>
+                <strong id="canvasTitle">等待生成</strong>
+                <span id="canvasMeta">坐标轴、色号、统计会显示在这里</span>
+              </div>
+              <button class="ghost-button" id="fitButton" type="button">适配屏幕</button>
+            </div>
+            <canvas id="patternCanvas" width="960" height="720" aria-label="拼豆图纸画布"></canvas>
+          </div>
+
+          <aside class="stats-panel">
+            <div class="panel-head">
+              <h2>色块汇总</h2>
+              <button class="text-button" id="clearHighlightButton" type="button">取消高亮</button>
+            </div>
+            <div class="summary-grid" id="summaryGrid"></div>
+            <div class="missing-box" id="missingBox" hidden></div>
+          </aside>
+        </section>
+
+        <section class="view" id="guideView">
+          <div class="guide-layout">
+            <div class="canvas-card">
+              <div class="canvas-toolbar">
+                <div>
+                  <strong id="guideTitle">拼豆模式</strong>
+                  <span id="guideMeta">生成图纸后自动分区</span>
+                </div>
+                <button class="ghost-button" id="resetGuideButton" type="button">重置进度</button>
+              </div>
+              <canvas id="guideCanvas" width="960" height="720" aria-label="拼豆指导画布"></canvas>
+            </div>
+
+            <aside class="guide-panel">
+              <div class="panel-head">
+                <h2>智能指导</h2>
+                <span class="guide-pill" id="guideProgressText">0 / 0</span>
+              </div>
+              <div class="progress-track" aria-hidden="true">
+                <span id="guideProgressFill"></span>
+              </div>
+              <div class="guide-current" id="guideCurrent"></div>
+              <div class="guide-actions">
+                <button class="primary-button" id="markSectionDoneButton" type="button">标记完成</button>
+                <button class="ghost-button" id="undoSectionButton" type="button">撤销</button>
+              </div>
+              <div class="guide-steps" id="guideSteps"></div>
+            </aside>
+          </div>
+        </section>
+
+        <section class="view" id="previewView">
+          <div class="preview-layout">
+            <div class="canvas-card">
+              <div class="canvas-toolbar">
+                <div>
+                  <strong>熨烫效果预览</strong>
+                  <span>同一张图纸，快速比较不同完成效果</span>
+                </div>
+              </div>
+              <canvas id="previewCanvas" width="900" height="720" aria-label="拼豆熨烫预览"></canvas>
+            </div>
+            <div class="mode-list" id="previewModes">
+              <button class="mode-card active" data-mode="beads" type="button">
+                <strong>原豆</strong>
+                <span>圆孔颗粒质感</span>
+              </button>
+              <button class="mode-card" data-mode="normal" type="button">
+                <strong>常规烫</strong>
+                <span>烘焙纸压烫质感</span>
+              </button>
+              <button class="mode-card" data-mode="towel" type="button">
+                <strong>毛巾烫</strong>
+                <span>绒面布纹效果</span>
+              </button>
+              <button class="mode-card" data-mode="bath" type="button">
+                <strong>澡巾烫</strong>
+                <span>网格压纹效果</span>
+              </button>
+              <button class="mode-card" data-mode="glitter" type="button">
+                <strong>闪粉烫</strong>
+                <span>细闪亮面效果</span>
+              </button>
+              <button class="mode-card" data-mode="back" type="button">
+                <strong>背面</strong>
+                <span>左右镜像检查</span>
+              </button>
+            </div>
+          </div>
+        </section>
+
+        <section class="view" id="libraryView">
+          <div class="library-head">
+            <div>
+              <h2>本地图纸库</h2>
+              <p>内置原创小图纸，也可以导入你自己的图纸包。</p>
+            </div>
+            <div class="library-actions">
+              <button class="ghost-button" id="saveCurrentPatternButton" type="button">保存当前</button>
+              <button class="dark-button" id="importPackButton" type="button">导入图纸包</button>
+              <input id="patternPackInput" type="file" accept=".json,application/json" hidden />
+            </div>
+          </div>
+          <div class="library-controls">
+            <input id="patternSearch" type="search" placeholder="搜索：小花、胸针、挂件、入门、动物" />
+            <select id="libraryCategory"></select>
+          </div>
+          <div class="library-grid" id="libraryGrid"></div>
+        </section>
+      </section>
+    </main>
+
+    <canvas id="workCanvas" hidden></canvas>
+    <script src="./core.js"></script>
+    <script src="./app.js"></script>
+  </body>
+</html>

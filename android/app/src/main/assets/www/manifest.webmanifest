@@ -1,0 +1,17 @@
+{
+  "name": "拼豆小助手",
+  "short_name": "拼豆",
+  "description": "本地生成拼豆图纸、色块统计、熨烫预览和 PNG 导出。",
+  "start_url": "./",
+  "display": "standalone",
+  "background_color": "#f7f7f4",
+  "theme_color": "#f7f7f4",
+  "icons": [
+    {
+      "src": "./assets/pin-bead-icon.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any maskable"
+    }
+  ]
+}

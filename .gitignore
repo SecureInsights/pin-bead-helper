@@ -1,0 +1,36 @@
+# Local tooling and dependency caches
+node_modules/
+.npm-cache/
+.android-build-tools/
+.gradle/
+
+# Android build outputs
+android/.gradle/
+android/app/build/
+*.apk
+*.aab
+
+# Local logs and QA artifacts
+*.log
+server.err.log
+server.out.log
+qa/
+design-qa.md
+AGENTS.md
+android/app-icon-preview.png
+assets/aurora-drift-reference.png
+assets/pin-bead-icon.svg
+android/app/src/main/assets/www/assets/pin-bead-icon.svg
+
+# Earlier prototype shell not used by the current static app
+/src/
+/vite.config.mjs
+
+# Local machine config
+.npmrc
+
+# Editor and OS files
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/

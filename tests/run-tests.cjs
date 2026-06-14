@@ -1,0 +1,194 @@
+const assert = require("node:assert/strict");
+const Core = require("../core.js");
+
+function makeImageData(width, height, sampler) {
+  const data = new Uint8ClampedArray(width * height * 4);
+  for (let y = 0; y < height; y += 1) {
+    for (let x = 0; x < width; x += 1) {
+      const index = ((y * width) + x) * 4;
+      const [r, g, b, a = 255] = sampler(x, y);
+      data[index] = r;
+      data[index + 1] = g;
+      data[index + 2] = b;
+      data[index + 3] = a;
+    }
+  }
+  return { data, width, height };
+}
+
+function testPaletteCounts() {
+  assert.equal(Core.getPalette("mard").length, 221, "MARD palette should expose 221 colors");
+  assert.equal(Core.getPalette("artkal").length, 221, "Artkal palette should expose 221 colors");
+
+  ["mard", "artkal"].forEach((brand) => {
+    [96, 120, 144, 168].forEach((count) => {
+      const preset = Core.getPreset(brand, `${brand}-${count}`);
+      const paletteIds = new Set(Core.getPalette(brand).map((color) => color.id));
+      assert.equal(preset.colorIds.length, count, `${preset.id} should have ${count} colors`);
+      preset.colorIds.forEach((id) => assert.ok(paletteIds.has(id), `${preset.id} contains unknown color ${id}`));
+    });
+  });
+}
+
+function testPatternGenerationUsesPresetOnly() {
+  const imageData = makeImageData(18, 18, (x, y) => {
+    if (x < 2 || y < 2 || x > 15 || y > 15) return [255, 255, 255, 255];
+    if (x < 9) return [248, 150, 80, 255];
+    return [60, 180, 220, 255];
+  });
+  const brand = "mard";
+  const presetId = "mard-96";
+  const palette = Core.getColorsForPreset(brand, presetId);
+  const allowed = new Set(palette.map((color) => color.id));
+  const project = Core.buildPatternFromImageData({
+    imageData,
+    brand,
+    palettePresetId: presetId,
+    palette,
+    gridWidth: 18,
+    gridHeight: 18,
+    removeBackground: true,
+    backgroundMode: "white"
+  });
+
+  assert.equal(project.gridWidth, 18);
+  assert.equal(project.gridHeight, 18);
+  assert.ok(project.totalBeads > 0, "pattern should keep subject pixels");
+  const statTotal = project.colorStats.reduce((sum, item) => sum + item.count, 0);
+  assert.equal(statTotal, project.totalBeads, "stats should sum to total bead count");
+  project.colorStats.forEach((stat) => assert.ok(allowed.has(stat.colorId), `unexpected color ${stat.colorId}`));
+}
+
+function testCustomPaletteRestriction() {
+  const brand = "mard";
+  const customIds = ["A9", "C6", "H6"];
+  const colors = Core.getColorsForPreset(brand, "mard-custom", customIds);
+  assert.deepEqual(colors.map((color) => color.id), customIds);
+}
+
+function testGuideSections() {
+  const imageData = makeImageData(32, 24, (x, y) => {
+    if (x < 4 || y < 4 || x > 27 || y > 19) return [255, 255, 255, 255];
+    if (x < 14) return [55, 55, 55, 255];
+    if (y < 12) return [248, 150, 80, 255];
+    return [70, 184, 223, 255];
+  });
+  const palette = Core.getColorsForPreset("mard", "mard-120");
+  const project = Core.buildPatternFromImageData({
+    imageData,
+    brand: "mard",
+    palettePresetId: "mard-120",
+    palette,
+    gridWidth: 32,
+    gridHeight: 24,
+    removeBackground: true,
+    backgroundMode: "white"
+  });
+  const sections = Core.buildGuideSections(project, { blockSize: 8 });
+  const ids = new Set(sections.map((section) => section.id));
+  const sectionTotal = sections.reduce((sum, section) => sum + section.totalBeads, 0);
+
+  assert.ok(sections.length > 1, "guide should split a project into workable sections");
+  assert.equal(ids.size, sections.length, "guide section ids should be unique");
+  assert.equal(sectionTotal, project.totalBeads, "guide sections should cover every bead once");
+  sections.forEach((section) => {
+    assert.ok(section.x >= 0 && section.y >= 0, "section should start inside the grid");
+    assert.ok(section.x + section.width <= project.gridWidth, "section width should stay inside the grid");
+    assert.ok(section.y + section.height <= project.gridHeight, "section height should stay inside the grid");
+    assert.ok(section.colorPlan.length > 0, "section should expose a color plan");
+    assert.equal(section.colorStats.reduce((sum, stat) => sum + stat.count, 0), section.totalBeads);
+  });
+}
+
+function makeChartImageData(matrix, cellSize, options = {}) {
+  const gridHeight = matrix.length;
+  const gridWidth = matrix[0].length;
+  const width = gridWidth * cellSize + 1;
+  const height = gridHeight * cellSize + 1;
+  const map = Core.getPaletteMap("mard");
+  return makeImageData(width, height, (x, y) => {
+    if (x % cellSize === 0 || y % cellSize === 0) return [188, 188, 198, 255];
+    const cellX = Math.floor(x / cellSize);
+    const cellY = Math.floor(y / cellSize);
+    const colorId = matrix[cellY][cellX];
+    const localX = x % cellSize;
+    const localY = y % cellSize;
+    if (!colorId) {
+      if (options.watermark && Math.abs((localY - localX) - 2) <= 1) return [160, 160, 160, 255];
+      return [255, 255, 255, 255];
+    }
+    const color = map[colorId];
+    const isText = localX > cellSize * 0.34 && localX < cellSize * 0.66 && localY > cellSize * 0.34 && localY < cellSize * 0.66;
+    if (isText) {
+      return colorId === "H6" ? [255, 255, 255, 255] : [20, 20, 20, 255];
+    }
+    return color.rgb.concat(255);
+  });
+}
+
+function testChartRecognition() {
+  const matrix = [
+    ["", "H6", "A9", ""],
+    ["H2", "A1", "C6", ""],
+    ["", "G13", "B13", "H4"]
+  ];
+  const imageData = makeChartImageData(matrix, 20, { watermark: true });
+  const estimate = Core.estimateChartGrid(imageData);
+  assert.equal(estimate.gridWidth, 4, "grid estimator should recover chart width");
+  assert.equal(estimate.gridHeight, 3, "grid estimator should recover chart height");
+
+  const project = Core.recognizePatternChart({
+    imageData,
+    brand: "mard",
+    palettePresetId: "mard-120",
+    palette: Core.getColorsForPreset("mard", "mard-120"),
+    gridWidth: 4,
+    gridHeight: 3,
+    ignoreWatermark: true
+  });
+  const stats = new Map(project.colorStats.map((stat) => [stat.colorId, stat.count]));
+  assert.equal(project.totalBeads, 8, "chart recognition should skip blank cells");
+  assert.equal(stats.get("H2"), 1, "chart recognition should keep white H2 cells with text");
+  assert.equal(stats.get("H6"), 1, "chart recognition should keep dark outline cells");
+  assert.equal(project.cells.filter((cell) => cell.isTransparent).length, 4);
+}
+
+function testLocalLibraryPatterns() {
+  assert.ok(Core.LOCAL_LIBRARY_PATTERNS.length >= 24, "local library should include many built-in patterns");
+  const pattern = Core.LOCAL_LIBRARY_PATTERNS[0];
+  const project = Core.createProjectFromLibraryPattern(pattern);
+  assert.equal(project.gridWidth, pattern.gridWidth);
+  assert.equal(project.gridHeight, pattern.gridHeight);
+  assert.ok(project.totalBeads > 0, "built-in pattern should create a project");
+}
+
+function testLibraryPatternNormalization() {
+  const pattern = Core.normalizeLibraryPattern({
+    title: "导入测试",
+    brand: "mard",
+    palettePresetId: "mard-120",
+    gridWidth: 2,
+    gridHeight: 2,
+    cells: [
+      { x: 0, y: 0, colorId: "A9" },
+      { x: 1, y: 0, colorId: "" },
+      { x: 0, y: 1, colorId: "H6" },
+      { x: 1, y: 1, colorId: "C6" }
+    ]
+  });
+  assert.ok(pattern, "valid project-like JSON should normalize");
+  assert.equal(pattern.cells.filter((cell) => !cell.isTransparent).length, 3);
+  const saved = Core.projectToLibraryPattern(Core.createProjectFromLibraryPattern(pattern), { title: "保存测试" });
+  assert.equal(saved.title, "保存测试");
+  assert.equal(saved.gridWidth, 2);
+}
+
+testPaletteCounts();
+testPatternGenerationUsesPresetOnly();
+testCustomPaletteRestriction();
+testGuideSections();
+testChartRecognition();
+testLocalLibraryPatterns();
+testLibraryPatternNormalization();
+
+console.log("All tests passed");
