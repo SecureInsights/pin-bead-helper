@@ -356,7 +356,170 @@
     };
   }
 
-  function averageCell(data, imageWidth, imageHeight, bounds, cellX, cellY, gridWidth, gridHeight, backgroundRgb, removeBackground, mode) {
+  function estimateSubjectCrop(imageData, options) {
+    const data = imageData.data || imageData;
+    const width = imageData.width || (options && options.width);
+    const height = imageData.height || (options && options.height);
+    if (!width || !height) {
+      return { x: 0, y: 0, width: 1, height: 1, confidence: 0 };
+    }
+
+    const backgroundRgb = averageCornerColor(data, width, height);
+    const backgroundMode = resolveBackgroundMode((options && options.backgroundMode) || "auto", backgroundRgb);
+    const bounds = findSubjectBounds(data, width, height, backgroundRgb, backgroundMode);
+    const isFullFrame = bounds.x <= 1 &&
+      bounds.y <= 1 &&
+      bounds.x + bounds.width >= width - 1 &&
+      bounds.y + bounds.height >= height - 1;
+    const areaRatio = (bounds.width * bounds.height) / Math.max(1, width * height);
+
+    return {
+      x: bounds.x / width,
+      y: bounds.y / height,
+      width: bounds.width / width,
+      height: bounds.height / height,
+      backgroundMode,
+      confidence: isFullFrame ? 0.2 : clamp(1 - areaRatio, 0.2, 0.95)
+    };
+  }
+
+  function enhanceImageData(imageData, options) {
+    const data = imageData.data || imageData;
+    const width = imageData.width || (options && options.width);
+    const height = imageData.height || (options && options.height);
+    const strength = clamp(Number(options && options.strength) || 0.62, 0, 1);
+    if (!data || !width || !height || strength <= 0) {
+      return imageData;
+    }
+
+    const output = new Uint8ClampedArray(data.length);
+    const sharpness = strength * 0.72;
+
+    for (let y = 0; y < height; y += 1) {
+      for (let x = 0; x < width; x += 1) {
+        const index = ((y * width) + x) * 4;
+        const r = data[index];
+        const g = data[index + 1];
+        const b = data[index + 2];
+        const a = data[index + 3];
+
+        if (a < 24) {
+          output[index] = r;
+          output[index + 1] = g;
+          output[index + 2] = b;
+          output[index + 3] = a;
+          continue;
+        }
+
+        const blur = [0, 0, 0];
+        let count = 0;
+        for (let oy = -1; oy <= 1; oy += 1) {
+          for (let ox = -1; ox <= 1; ox += 1) {
+            const nx = clamp(x + ox, 0, width - 1);
+            const ny = clamp(y + oy, 0, height - 1);
+            const neighbor = ((ny * width) + nx) * 4;
+            blur[0] += data[neighbor];
+            blur[1] += data[neighbor + 1];
+            blur[2] += data[neighbor + 2];
+            count += 1;
+          }
+        }
+        blur[0] /= count;
+        blur[1] /= count;
+        blur[2] /= count;
+
+        [r, g, b].forEach((value, channel) => {
+          const sharpened = value + (value - blur[channel]) * sharpness;
+          output[index + channel] = clamp(Math.round(sharpened), 0, 255);
+        });
+        output[index + 3] = a;
+      }
+    }
+
+    return { data: output, width, height };
+  }
+
+  function isBackgroundPixel(rgb, alpha, backgroundRgb, removeBackground, threshold) {
+    return removeBackground && (alpha < 24 || colorDistance(rgb, backgroundRgb) <= threshold);
+  }
+
+  function samplePixelLuminance(data, imageWidth, imageHeight, x, y) {
+    const safeX = clamp(x, 0, imageWidth - 1);
+    const safeY = clamp(y, 0, imageHeight - 1);
+    const [r, g, b] = getPixel(data, imageWidth, safeX, safeY);
+    return luminance([r, g, b]);
+  }
+
+  function boostRgbClarity(rgb, strength) {
+    return rgb.map((value) => Math.round(clamp(value, 0, 255)));
+  }
+
+  function detailWeightedCellAverage(data, imageWidth, imageHeight, startX, endX, startY, endY, backgroundRgb, removeBackground, threshold, average, count, strength) {
+    const avgLum = luminance(average);
+    const weighted = [0, 0, 0];
+    const darkTotal = [0, 0, 0];
+    const lightTotal = [0, 0, 0];
+    let weightSum = 0;
+    let darkCount = 0;
+    let lightCount = 0;
+
+    for (let y = startY; y < endY && y < imageHeight; y += 1) {
+      for (let x = startX; x < endX && x < imageWidth; x += 1) {
+        const [r, g, b, a] = getPixel(data, imageWidth, x, y);
+        const rgb = [r, g, b];
+        if (isBackgroundPixel(rgb, a, backgroundRgb, removeBackground, threshold)) continue;
+
+        const lum = luminance(rgb);
+        const edge = (
+          Math.abs(lum - samplePixelLuminance(data, imageWidth, imageHeight, x - 1, y)) +
+          Math.abs(lum - samplePixelLuminance(data, imageWidth, imageHeight, x + 1, y)) +
+          Math.abs(lum - samplePixelLuminance(data, imageWidth, imageHeight, x, y - 1)) +
+          Math.abs(lum - samplePixelLuminance(data, imageWidth, imageHeight, x, y + 1))
+        ) / 4;
+        const contrast = Math.abs(lum - avgLum);
+        const weight = 1 + (strength * (Math.min(3.2, contrast / 34) + Math.min(2.4, edge / 42)));
+
+        weighted[0] += r * weight;
+        weighted[1] += g * weight;
+        weighted[2] += b * weight;
+        weightSum += weight;
+
+        if (lum < avgLum - 48) {
+          darkTotal[0] += r;
+          darkTotal[1] += g;
+          darkTotal[2] += b;
+          darkCount += 1;
+        } else if (lum > avgLum + 48) {
+          lightTotal[0] += r;
+          lightTotal[1] += g;
+          lightTotal[2] += b;
+          lightCount += 1;
+        }
+      }
+    }
+
+    if (!weightSum) return average;
+
+    let result = weighted.map((value) => value / weightSum);
+    const darkRatio = darkCount / count;
+    const lightRatio = lightCount / count;
+    let detailRgb = null;
+
+    if (darkRatio >= 0.1 && darkRatio <= 0.45 && avgLum > 105) {
+      detailRgb = darkTotal.map((value) => value / darkCount);
+    } else if (lightRatio >= 0.1 && lightRatio <= 0.45 && avgLum < 150) {
+      detailRgb = lightTotal.map((value) => value / lightCount);
+    }
+
+    if (detailRgb) {
+      const blend = Math.min(0.72, 0.46 + (strength * 0.34));
+      result = result.map((value, index) => value + ((detailRgb[index] - value) * blend));
+    }
+
+    return boostRgbClarity(result, strength);
+  }
+
+  function averageCell(data, imageWidth, imageHeight, bounds, cellX, cellY, gridWidth, gridHeight, backgroundRgb, removeBackground, mode, options) {
     const startX = Math.floor(bounds.x + (cellX * bounds.width / gridWidth));
     const endX = Math.max(startX + 1, Math.floor(bounds.x + ((cellX + 1) * bounds.width / gridWidth)));
     const startY = Math.floor(bounds.y + (cellY * bounds.height / gridHeight));
@@ -365,10 +528,12 @@
     let count = 0;
     let skipped = 0;
     const threshold = mode === "white" ? 34 : 42;
+    const clarityBoost = Boolean(options && options.clarityBoost);
+    const clarityStrength = clamp(Number(options && options.clarityStrength) || 0.72, 0, 1);
     for (let y = startY; y < endY && y < imageHeight; y += 1) {
       for (let x = startX; x < endX && x < imageWidth; x += 1) {
         const [r, g, b, a] = getPixel(data, imageWidth, x, y);
-        const isBackground = removeBackground && (a < 24 || colorDistance([r, g, b], backgroundRgb) <= threshold);
+        const isBackground = isBackgroundPixel([r, g, b], a, backgroundRgb, removeBackground, threshold);
         if (isBackground) {
           skipped += 1;
         } else {
@@ -379,8 +544,25 @@
         }
       }
     }
-    if (count === 0 || skipped > count * 4) return null;
-    return total.map((value) => Math.round(value / count));
+    if (count === 0 || skipped > count * (clarityBoost ? 8 : 4)) return null;
+
+    const average = total.map((value) => Math.round(value / count));
+    if (!clarityBoost || count < 3) return average;
+    return detailWeightedCellAverage(
+      data,
+      imageWidth,
+      imageHeight,
+      startX,
+      endX,
+      startY,
+      endY,
+      backgroundRgb,
+      removeBackground,
+      threshold,
+      average,
+      count,
+      clarityStrength
+    );
   }
 
   function averageRegion(data, imageWidth, imageHeight, left, top, width, height, options) {
@@ -430,7 +612,10 @@
     const cells = [];
     for (let y = 0; y < gridHeight; y += 1) {
       for (let x = 0; x < gridWidth; x += 1) {
-        const average = averageCell(data, width, height, bounds, x, y, gridWidth, gridHeight, backgroundRgb, removeBackground, backgroundMode);
+        const average = averageCell(data, width, height, bounds, x, y, gridWidth, gridHeight, backgroundRgb, removeBackground, backgroundMode, {
+          clarityBoost: options.clarityBoost === true,
+          clarityStrength: options.clarityStrength
+        });
         if (!average) {
           cells.push({ x, y, colorId: "", hex: "transparent", rgb: [255, 255, 255], isTransparent: true });
         } else {
@@ -1065,11 +1250,14 @@
     const completedSectionIds = new Set(options && options.completedSectionIds ? options.completedSectionIds : []);
     const pixelRatio = options && options.pixelRatio ? options.pixelRatio : 1;
     const cssWidth = options && options.width ? options.width : canvas.clientWidth || 900;
-    const axis = 34;
-    const padding = 18;
-    const cellSize = Math.max(14, Math.floor((cssWidth - padding * 2 - axis * 2) / Math.max(project.gridWidth, project.gridHeight)));
+    const axis = Number.isFinite(Number(options && options.axis)) ? Number(options.axis) : 34;
+    const padding = Number.isFinite(Number(options && options.padding)) ? Number(options.padding) : 18;
+    const minCellSize = Number.isFinite(Number(options && options.minCellSize)) ? Number(options.minCellSize) : 14;
+    const cellSize = Math.max(minCellSize, Math.floor((cssWidth - padding * 2 - axis * 2) / Math.max(project.gridWidth, project.gridHeight)));
     const width = padding * 2 + axis * 2 + (project.gridWidth * cellSize);
     const height = padding * 2 + axis * 2 + (project.gridHeight * cellSize);
+    const labelFontSize = axis <= 24 ? 8 : 10;
+    const labelStep = cellSize < 7 ? 10 : cellSize < 10 ? 5 : cellSize < 12 ? 2 : 1;
     setupCanvas(canvas, ctx, width, height, pixelRatio);
     ctx.fillStyle = "#ffffff";
     ctx.fillRect(0, 0, width, height);
@@ -1079,19 +1267,21 @@
     const gridY = padding + axis;
 
     for (let x = 0; x < project.gridWidth; x += 1) {
+      if (labelStep > 1 && x !== 0 && x !== project.gridWidth - 1 && (x + 1) % labelStep !== 0) continue;
       const labelX = gridX + x * cellSize + cellSize / 2;
       ctx.fillStyle = "#9b9b94";
-      ctx.font = "10px -apple-system, BlinkMacSystemFont, sans-serif";
+      ctx.font = `${labelFontSize}px -apple-system, BlinkMacSystemFont, sans-serif`;
       ctx.fillText(String(x + 1), labelX, padding + 9);
-      ctx.fillText(String(x + 1), labelX, gridY + project.gridHeight * cellSize + 18);
+      ctx.fillText(String(x + 1), labelX, gridY + project.gridHeight * cellSize + Math.max(12, axis - 16));
     }
 
     for (let y = 0; y < project.gridHeight; y += 1) {
+      if (labelStep > 1 && y !== 0 && y !== project.gridHeight - 1 && (y + 1) % labelStep !== 0) continue;
       const labelY = gridY + y * cellSize + cellSize / 2;
       ctx.fillStyle = "#9b9b94";
-      ctx.font = "10px -apple-system, BlinkMacSystemFont, sans-serif";
+      ctx.font = `${labelFontSize}px -apple-system, BlinkMacSystemFont, sans-serif`;
       ctx.fillText(String(y + 1), padding + 11, labelY);
-      ctx.fillText(String(y + 1), gridX + project.gridWidth * cellSize + 18, labelY);
+      ctx.fillText(String(y + 1), gridX + project.gridWidth * cellSize + Math.max(12, axis - 16), labelY);
     }
 
     project.cells.forEach((cell) => {
@@ -1103,15 +1293,16 @@
       if (!cell.isTransparent) {
         ctx.fillStyle = dim ? fadeRgb(cell.rgb, 0.78) : cell.hex;
         ctx.fillRect(x, y, cellSize, cellSize);
-        if (cellSize >= 14) {
+        if (cellSize >= 12) {
+          const label = cell.shortId || cell.colorId;
           ctx.fillStyle = dim ? "#898982" : textColorFor(cell.rgb);
-          ctx.font = `${cellSize >= 18 ? 10 : 8}px -apple-system, BlinkMacSystemFont, sans-serif`;
-          ctx.fillText(cell.colorId, x + cellSize / 2, y + cellSize / 2 + 0.5);
+          ctx.font = `${fitCellLabelFont(ctx, label, cellSize)}px -apple-system, BlinkMacSystemFont, sans-serif`;
+          ctx.fillText(label, x + cellSize / 2, y + cellSize / 2 + 0.5);
         }
       }
     });
 
-    drawGrid(ctx, gridX, gridY, project.gridWidth, project.gridHeight, cellSize, 0, 0);
+    drawGrid(ctx, gridX, gridY, project.gridWidth, project.gridHeight, cellSize, 0, 0, cellSize >= 7);
     guideSections.forEach((section) => {
       if (completedSectionIds.has(section.id)) {
         drawCompletedSection(ctx, section, gridX, gridY, cellSize);
@@ -1128,6 +1319,19 @@
       cell.y >= section.y &&
       cell.x < section.x + section.width &&
       cell.y < section.y + section.height;
+  }
+
+  function fitCellLabelFont(ctx, label, cellSize) {
+    const text = String(label || "");
+    let fontSize = cellSize >= 20 ? 10 : cellSize >= 16 ? 8 : 7;
+    const minFontSize = 5;
+    const maxWidth = Math.max(4, cellSize - 1.5);
+    while (fontSize > minFontSize) {
+      ctx.font = `${fontSize}px -apple-system, BlinkMacSystemFont, sans-serif`;
+      if (ctx.measureText(text).width <= maxWidth) break;
+      fontSize -= 1;
+    }
+    return fontSize;
   }
 
   function drawFocusedSection(ctx, section, gridX, gridY, cellSize) {
@@ -1174,7 +1378,7 @@
     const mode = options && options.mode ? options.mode : "beads";
     const pixelRatio = options && options.pixelRatio ? options.pixelRatio : 1;
     const cssWidth = options && options.width ? options.width : canvas.clientWidth || 900;
-    const padding = 28;
+    const padding = Number.isFinite(Number(options && options.padding)) ? Number(options.padding) : 28;
     const cellSize = Math.max(5, Math.floor((cssWidth - padding * 2) / Math.max(project.gridWidth, project.gridHeight)));
     const width = padding * 2 + project.gridWidth * cellSize;
     const height = padding * 2 + project.gridHeight * cellSize;
@@ -1315,10 +1519,12 @@
     const startY = range ? range.y : 0;
     const cellsWide = range ? range.width : project.gridWidth;
     const cellsHigh = range ? range.height : project.gridHeight;
+    const stats = range && range.colorStats ? range.colorStats : project.colorStats;
+    const totalBeads = range && Number.isFinite(range.totalBeads) ? range.totalBeads : project.totalBeads;
     const cellSize = Math.max(14, Math.min(28, Math.floor(1180 / Math.max(cellsWide, cellsHigh))));
     const margin = 54;
     const axis = 36;
-    const summaryRows = Math.ceil(project.colorStats.length / 8);
+    const summaryRows = Math.max(1, Math.ceil(stats.length / 8));
     const width = margin * 2 + axis * 2 + cellsWide * cellSize;
     const height = margin * 2 + 96 + axis * 2 + cellsHigh * cellSize + Math.max(118, summaryRows * 76);
     setupCanvas(canvas, ctx, width, height, 1);
@@ -1332,7 +1538,8 @@
     ctx.fillStyle = "#5f5e58";
     ctx.font = "22px -apple-system, BlinkMacSystemFont, sans-serif";
     const pageText = range && range.total > 1 ? ` · Page ${range.index}/${range.total}` : "";
-    ctx.fillText(`${project.palettePresetId} · ${project.gridWidth}x${project.gridHeight} · ${project.totalBeads} 颗${pageText}`, margin, margin + 62);
+    const rangeText = range ? ` · ${cellsWide}x${cellsHigh} · ${totalBeads} 颗` : ` · ${project.gridWidth}x${project.gridHeight} · ${project.totalBeads} 颗`;
+    ctx.fillText(`${project.palettePresetId}${rangeText}${pageText}`, margin, margin + 62);
 
     const gridX = margin + axis;
     const gridY = margin + 96 + axis;
@@ -1370,7 +1577,7 @@
       }
     }
     drawGrid(ctx, gridX, gridY, cellsWide, cellsHigh, cellSize, startX, startY);
-    drawSummary(ctx, project, margin, gridY + cellsHigh * cellSize + 62, width - margin * 2);
+    drawSummary(ctx, stats, margin, gridY + cellsHigh * cellSize + 62, width - margin * 2);
     return { width, height };
   }
 
@@ -1382,18 +1589,20 @@
     ctx.setTransform(pixelRatio, 0, 0, pixelRatio, 0, 0);
   }
 
-  function drawGrid(ctx, gridX, gridY, gridWidth, gridHeight, cellSize, offsetX, offsetY) {
+  function drawGrid(ctx, gridX, gridY, gridWidth, gridHeight, cellSize, offsetX, offsetY, showFineLines = true) {
     for (let x = 0; x <= gridWidth; x += 1) {
+      if (!showFineLines && x !== 0 && x !== gridWidth && (offsetX + x) % 5 !== 0) continue;
       ctx.strokeStyle = (offsetX + x) % 5 === 0 ? "#b8b8ca" : "#deded9";
-      ctx.lineWidth = (offsetX + x) % 5 === 0 ? 1.4 : 0.7;
+      ctx.lineWidth = (offsetX + x) % 5 === 0 ? 1.2 : 0.6;
       ctx.beginPath();
       ctx.moveTo(gridX + x * cellSize, gridY);
       ctx.lineTo(gridX + x * cellSize, gridY + gridHeight * cellSize);
       ctx.stroke();
     }
     for (let y = 0; y <= gridHeight; y += 1) {
+      if (!showFineLines && y !== 0 && y !== gridHeight && (offsetY + y) % 5 !== 0) continue;
       ctx.strokeStyle = (offsetY + y) % 5 === 0 ? "#b8b8ca" : "#deded9";
-      ctx.lineWidth = (offsetY + y) % 5 === 0 ? 1.4 : 0.7;
+      ctx.lineWidth = (offsetY + y) % 5 === 0 ? 1.2 : 0.6;
       ctx.beginPath();
       ctx.moveTo(gridX, gridY + y * cellSize);
       ctx.lineTo(gridX + gridWidth * cellSize, gridY + y * cellSize);
@@ -1401,10 +1610,10 @@
     }
   }
 
-  function drawSummary(ctx, project, left, top, width) {
+  function drawSummary(ctx, colorStats, left, top, width) {
     const itemWidth = Math.floor(width / 8);
     const chipSize = 42;
-    project.colorStats.forEach((stat, index) => {
+    colorStats.forEach((stat, index) => {
       const col = index % 8;
       const row = Math.floor(index / 8);
       const x = left + col * itemWidth;
@@ -1422,8 +1631,86 @@
     });
   }
 
+  function drawColorStatsCanvas(canvas, project) {
+    const ctx = canvas.getContext("2d");
+    const margin = 54;
+    const width = 1200;
+    const columns = 4;
+    const gap = 18;
+    const itemWidth = Math.floor((width - margin * 2 - gap * (columns - 1)) / columns);
+    const itemHeight = 78;
+    const rows = Math.max(1, Math.ceil(project.colorStats.length / columns));
+    const height = margin * 2 + 112 + rows * itemHeight;
+    setupCanvas(canvas, ctx, width, height, 1);
+
+    ctx.fillStyle = "#ffffff";
+    ctx.fillRect(0, 0, width, height);
+    ctx.fillStyle = "#171716";
+    ctx.font = "700 34px -apple-system, BlinkMacSystemFont, sans-serif";
+    ctx.textAlign = "left";
+    ctx.textBaseline = "middle";
+    ctx.fillText(`${project.title || "拼豆图纸"} · 色库清单`, margin, margin + 24);
+
+    ctx.fillStyle = "#5f5e58";
+    ctx.font = "22px -apple-system, BlinkMacSystemFont, sans-serif";
+    ctx.fillText(`${project.palettePresetId} · ${project.gridWidth}x${project.gridHeight} · ${project.totalBeads} 颗 · ${project.colorStats.length} 个色号`, margin, margin + 62);
+
+    const startY = margin + 112;
+    project.colorStats.forEach((stat, index) => {
+      const col = index % columns;
+      const row = Math.floor(index / columns);
+      const x = margin + col * (itemWidth + gap);
+      const y = startY + row * itemHeight;
+
+      ctx.fillStyle = "#f7f7f4";
+      roundedRect(ctx, x, y, itemWidth, 58, 12);
+      ctx.fill();
+      ctx.strokeStyle = "rgba(28, 28, 25, 0.09)";
+      ctx.stroke();
+
+      ctx.fillStyle = stat.hex;
+      ctx.fillRect(x + 10, y + 10, 38, 38);
+      ctx.strokeStyle = "rgba(0,0,0,0.12)";
+      ctx.strokeRect(x + 10, y + 10, 38, 38);
+
+      ctx.fillStyle = textColorFor(stat.rgb);
+      ctx.font = "700 12px -apple-system, BlinkMacSystemFont, sans-serif";
+      ctx.textAlign = "center";
+      ctx.fillText(stat.colorId, x + 29, y + 30);
+
+      ctx.textAlign = "left";
+      ctx.fillStyle = "#171716";
+      ctx.font = "700 20px -apple-system, BlinkMacSystemFont, sans-serif";
+      ctx.fillText(stat.colorId, x + 62, y + 23);
+      ctx.fillStyle = "#5f5e58";
+      ctx.font = "18px -apple-system, BlinkMacSystemFont, sans-serif";
+      ctx.fillText(`x${stat.count}`, x + 62, y + 45);
+    });
+
+    return { width, height };
+  }
+
   function fadeRgb(rgb, amount) {
     return rgbToHex(mixRgb(rgb, [255, 255, 255], amount));
+  }
+
+  function summarizeRange(project, range) {
+    const cells = [];
+    const startX = range.x;
+    const startY = range.y;
+    const endX = startX + range.width;
+    const endY = startY + range.height;
+    for (let y = startY; y < endY; y += 1) {
+      for (let x = startX; x < endX; x += 1) {
+        const cell = project.cells[y * project.gridWidth + x];
+        if (cell && !cell.isTransparent) cells.push(cell);
+      }
+    }
+    const colorStats = summarizeCells(cells);
+    return {
+      colorStats,
+      totalBeads: colorStats.reduce((sum, stat) => sum + stat.count, 0)
+    };
   }
 
   function getExportPages(project, chunkSize) {
@@ -1431,13 +1718,20 @@
     const pages = [];
     for (let y = 0; y < project.gridHeight; y += chunk) {
       for (let x = 0; x < project.gridWidth; x += chunk) {
-        pages.push({
+        const page = {
           x,
           y,
           width: Math.min(chunk, project.gridWidth - x),
-          height: Math.min(chunk, project.gridHeight - y),
-          index: pages.length + 1
-        });
+          height: Math.min(chunk, project.gridHeight - y)
+        };
+        const stats = summarizeRange(project, page);
+        if (stats.totalBeads > 0) {
+          pages.push({
+            ...page,
+            ...stats,
+            index: pages.length + 1
+          });
+        }
       }
     }
     return pages.map((page) => ({ ...page, total: pages.length }));
@@ -1452,6 +1746,8 @@
     getPaletteMap,
     getColorsForPreset,
     estimateGridSize,
+    estimateSubjectCrop,
+    enhanceImageData,
     buildPatternFromImageData,
     recognizePatternChart,
     estimateChartGrid,
@@ -1464,6 +1760,7 @@
     drawPatternCanvas,
     drawPreviewCanvas,
     drawExportCanvas,
+    drawColorStatsCanvas,
     getExportPages,
     rgbToHex,
     hexToRgb,

@@ -66,6 +66,75 @@ function testCustomPaletteRestriction() {
   assert.deepEqual(colors.map((color) => color.id), customIds);
 }
 
+function testClarityBoostPreservesThinDetails() {
+  const imageData = makeImageData(160, 160, (x) => {
+    if (x % 10 < 1) return [53, 55, 56, 255];
+    return [255, 255, 251, 255];
+  });
+  const palette = Core.getColorsForPreset("mard", "mard-custom", ["H2", "H6"]);
+  const normal = Core.buildPatternFromImageData({
+    imageData,
+    brand: "mard",
+    palettePresetId: "mard-custom",
+    palette,
+    gridWidth: 16,
+    gridHeight: 16,
+    removeBackground: false
+  });
+  const sharp = Core.buildPatternFromImageData({
+    imageData,
+    brand: "mard",
+    palettePresetId: "mard-custom",
+    palette,
+    gridWidth: 16,
+    gridHeight: 16,
+    removeBackground: false,
+    clarityBoost: true
+  });
+
+  assert.equal(normal.cells[0].colorId, "H2", "plain averaging should treat a thin line as mostly light");
+  assert.equal(sharp.cells[0].colorId, "H6", "clarity boost should preserve a high-contrast thin line");
+}
+
+function testImageEnhancementRaisesEdgeContrast() {
+  const imageData = makeImageData(7, 7, (x) => {
+    if (x === 3) return [80, 80, 80, 255];
+    return [210, 210, 210, 255];
+  });
+  const enhanced = Core.enhanceImageData(imageData, { strength: 0.8 });
+  const darkIndex = ((3 * enhanced.width) + 3) * 4;
+  const lightIndex = ((3 * enhanced.width) + 1) * 4;
+  const beforeContrast = 210 - 80;
+  const afterContrast = enhanced.data[lightIndex] - enhanced.data[darkIndex];
+
+  assert.ok(afterContrast > beforeContrast, "image enhancement should increase edge contrast before bead sampling");
+}
+
+function testImageEnhancementKeepsFlatColor() {
+  const imageData = makeImageData(5, 5, () => [120, 160, 200, 255]);
+  const enhanced = Core.enhanceImageData(imageData, { strength: 0.9 });
+  for (let index = 0; index < enhanced.data.length; index += 4) {
+    assert.equal(enhanced.data[index], 120, "flat red channel should stay unchanged");
+    assert.equal(enhanced.data[index + 1], 160, "flat green channel should stay unchanged");
+    assert.equal(enhanced.data[index + 2], 200, "flat blue channel should stay unchanged");
+    assert.equal(enhanced.data[index + 3], 255, "alpha should stay unchanged");
+  }
+}
+
+function testSubjectCropFindsForegroundBounds() {
+  const imageData = makeImageData(100, 80, (x, y) => {
+    if (x >= 20 && x <= 69 && y >= 10 && y <= 59) return [40, 40, 40, 255];
+    return [255, 255, 255, 255];
+  });
+  const crop = Core.estimateSubjectCrop(imageData, { backgroundMode: "white" });
+
+  assert.ok(crop.confidence > 0.3, "subject crop should be confident on a clean white background");
+  assert.ok(crop.x > 0.1 && crop.x < 0.25, "subject crop should start near the foreground left edge");
+  assert.ok(crop.y >= 0 && crop.y < 0.16, "subject crop should start near the foreground top edge");
+  assert.ok(crop.width < 0.7, "subject crop should be tighter than the full image width");
+  assert.ok(crop.height < 0.75, "subject crop should be tighter than the full image height");
+}
+
 function testGuideSections() {
   const imageData = makeImageData(32, 24, (x, y) => {
     if (x < 4 || y < 4 || x > 27 || y > 19) return [255, 255, 255, 255];
@@ -183,12 +252,41 @@ function testLibraryPatternNormalization() {
   assert.equal(saved.gridWidth, 2);
 }
 
+function testExportPagesSkipEmptyBlocks() {
+  const pattern = Core.normalizeLibraryPattern({
+    title: "分块导出测试",
+    brand: "mard",
+    palettePresetId: "mard-120",
+    gridWidth: 58,
+    gridHeight: 58,
+    cells: Array.from({ length: 58 * 58 }, (_, index) => {
+      const x = index % 58;
+      const y = Math.floor(index / 58);
+      const colorId = x < 29 && y < 29 ? "A9" : "";
+      return { x, y, colorId };
+    })
+  });
+  const project = Core.createProjectFromLibraryPattern(pattern);
+  const pages = Core.getExportPages(project, 29);
+
+  assert.equal(pages.length, 1, "export pages should skip empty board blocks");
+  assert.equal(pages[0].x, 0);
+  assert.equal(pages[0].y, 0);
+  assert.equal(pages[0].totalBeads, 29 * 29);
+  assert.deepEqual(pages[0].colorStats.map((stat) => [stat.colorId, stat.count]), [["A9", 29 * 29]]);
+}
+
 testPaletteCounts();
 testPatternGenerationUsesPresetOnly();
 testCustomPaletteRestriction();
+testClarityBoostPreservesThinDetails();
+testImageEnhancementRaisesEdgeContrast();
+testImageEnhancementKeepsFlatColor();
+testSubjectCropFindsForegroundBounds();
 testGuideSections();
 testChartRecognition();
 testLocalLibraryPatterns();
 testLibraryPatternNormalization();
+testExportPagesSkipEmptyBlocks();
 
 console.log("All tests passed");

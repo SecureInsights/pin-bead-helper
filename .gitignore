@@ -2,6 +2,8 @@
 node_modules/
 .npm-cache/
 .android-build-tools/
+.android-home/
+.android-sdk/
 .gradle/
 
 # Android build outputs

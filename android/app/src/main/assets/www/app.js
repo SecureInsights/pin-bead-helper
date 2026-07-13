@@ -8,6 +8,7 @@ const STORAGE_KEYS = {
   importedPatterns: "pin_bead_helper_imported_patterns"
 };
 
+const EXPORT_BOARD_SIZE = 29;
 const $ = (id) => document.getElementById(id);
 
 const els = {
@@ -23,6 +24,7 @@ const els = {
   presetSelect: $("presetSelect"),
   gridWidth: $("gridWidth"),
   gridHeight: $("gridHeight"),
+  clarityBoost: $("clarityBoost"),
   removeBackground: $("removeBackground"),
   backgroundMode: $("backgroundMode"),
   ignoreWatermark: $("ignoreWatermark"),
@@ -37,12 +39,14 @@ const els = {
   projectTitle: $("projectTitle"),
   canvasTitle: $("canvasTitle"),
   canvasMeta: $("canvasMeta"),
+  workspacePanel: $("workspacePanel"),
   patternCanvas: $("patternCanvas"),
   previewCanvas: $("previewCanvas"),
   workCanvas: $("workCanvas"),
   summaryGrid: $("summaryGrid"),
   missingBox: $("missingBox"),
   clearHighlightButton: $("clearHighlightButton"),
+  clearCacheButton: $("clearCacheButton"),
   downloadButton: $("downloadButton"),
   shareButton: $("shareButton"),
   fitButton: $("fitButton"),
@@ -62,7 +66,16 @@ const els = {
   libraryGrid: $("libraryGrid"),
   importPackButton: $("importPackButton"),
   patternPackInput: $("patternPackInput"),
-  saveCurrentPatternButton: $("saveCurrentPatternButton")
+  saveCurrentPatternButton: $("saveCurrentPatternButton"),
+  exportPanel: $("exportPanel"),
+  exportGrid: $("exportGrid"),
+  closeExportPanelButton: $("closeExportPanelButton"),
+  exportViewer: $("exportViewer"),
+  exportViewerCanvas: $("exportViewerCanvas"),
+  exportViewerTitle: $("exportViewerTitle"),
+  exportViewerMeta: $("exportViewerMeta"),
+  closeExportViewerButton: $("closeExportViewerButton"),
+  downloadViewedExportButton: $("downloadViewedExportButton")
 };
 
 const state = {
@@ -77,8 +90,10 @@ const state = {
   selectedColorId: "",
   previewMode: "beads",
   activeGuideSectionId: "",
+  lastCompletedGuideSectionId: "",
   guideSections: [],
   guideLayout: null,
+  exportViewTarget: null,
   guideProgress: loadJson(STORAGE_KEYS.guideProgress, {}),
   importedPatterns: loadJson(STORAGE_KEYS.importedPatterns, []),
   inventory: loadJson(STORAGE_KEYS.inventory, { mard: [], artkal: [] }),
@@ -87,6 +102,7 @@ const state = {
     presetId: "mard-120",
     gridWidth: 36,
     gridHeight: 36,
+    clarityBoost: true,
     removeBackground: true,
     backgroundMode: "auto",
     ignoreWatermark: true
@@ -119,6 +135,7 @@ function restoreSettings() {
   els.brandSelect.value = state.settings.brand;
   els.gridWidth.value = state.settings.gridWidth;
   els.gridHeight.value = state.settings.gridHeight;
+  els.clarityBoost.checked = state.settings.clarityBoost !== false;
   els.removeBackground.checked = state.settings.removeBackground !== false;
   els.backgroundMode.value = state.settings.backgroundMode || "auto";
   els.ignoreWatermark.checked = state.settings.ignoreWatermark !== false;
@@ -172,6 +189,11 @@ function bindEvents() {
     });
   });
 
+  els.clarityBoost.addEventListener("change", () => {
+    state.settings.clarityBoost = els.clarityBoost.checked;
+    saveSettings();
+  });
+
   els.removeBackground.addEventListener("change", () => {
     state.settings.removeBackground = els.removeBackground.checked;
     saveSettings();
@@ -205,8 +227,18 @@ function bindEvents() {
     renderProject();
   });
   els.fitButton.addEventListener("click", renderProject);
+  els.clearCacheButton.addEventListener("click", clearAppCache);
   els.downloadButton.addEventListener("click", downloadProject);
   els.shareButton.addEventListener("click", shareApp);
+  els.closeExportPanelButton.addEventListener("click", () => {
+    els.exportPanel.hidden = true;
+  });
+  els.exportGrid.addEventListener("click", handleExportGridClick);
+  els.closeExportViewerButton.addEventListener("click", closeExportViewer);
+  els.exportViewer.addEventListener("click", (event) => {
+    if (event.target === els.exportViewer) closeExportViewer();
+  });
+  els.downloadViewedExportButton.addEventListener("click", downloadCurrentExportView);
   els.guideCanvas.addEventListener("click", handleGuideCanvasClick);
   els.markSectionDoneButton.addEventListener("click", markActiveSectionDone);
   els.undoSectionButton.addEventListener("click", undoActiveSection);
@@ -218,7 +250,7 @@ function bindEvents() {
   els.saveCurrentPatternButton.addEventListener("click", saveCurrentProjectToLibrary);
 
   document.querySelectorAll(".tab").forEach((tab) => {
-    tab.addEventListener("click", () => switchView(tab.dataset.view));
+    tab.addEventListener("click", () => switchView(tab.dataset.view, { scroll: true }));
   });
 
   els.previewModes.addEventListener("click", (event) => {
@@ -426,10 +458,25 @@ function resetCrop() {
 
 function centerCropSubject() {
   if (!state.image) return;
-  state.cropRect = { x: 0.08, y: 0.08, width: 0.84, height: 0.84 };
+  const imageData = getFullImageData(1000);
+  const estimate = Core.estimateSubjectCrop(imageData, {
+    backgroundMode: els.backgroundMode.value
+  });
+  if (estimate && estimate.confidence >= 0.25) {
+    state.cropRect = normalizeCropRect({
+      x: estimate.x,
+      y: estimate.y,
+      width: estimate.width,
+      height: estimate.height
+    });
+  } else {
+    state.cropRect = { x: 0.08, y: 0.08, width: 0.84, height: 0.84 };
+  }
   renderCropCanvas();
   syncGridToCrop({ preferChart: false, silent: true });
-  setStatus("已居中裁剪并按比例更新格数，可以继续拖动微调。");
+  setStatus(estimate && estimate.confidence >= 0.25
+    ? "已按主体轮廓裁剪并更新格数，可以继续拖动微调。"
+    : "未稳定识别主体，已居中裁剪并按比例更新格数。");
 }
 
 function autoCropChart() {
@@ -519,7 +566,13 @@ function suggestGridSize() {
   syncGridToCrop({ preferChart: true, silent: false });
 }
 
-function getImageDataForPattern(maxSide = 560) {
+function getPatternMaxSide() {
+  if (!els.clarityBoost.checked) return 560;
+  const gridLongSide = Math.max(Number(els.gridWidth.value) || 36, Number(els.gridHeight.value) || 36);
+  return clamp(Math.round(gridLongSide * 24), 720, 1400);
+}
+
+function getImageDataForPattern(maxSide = 560, options = {}) {
   const crop = getCropSourceRect();
   const scale = Math.min(1, maxSide / Math.max(crop.width, crop.height));
   const width = Math.max(1, Math.round(crop.width * scale));
@@ -530,7 +583,9 @@ function getImageDataForPattern(maxSide = 560) {
   canvas.height = height;
   ctx.clearRect(0, 0, width, height);
   ctx.drawImage(state.image, crop.x, crop.y, crop.width, crop.height, 0, 0, width, height);
-  return ctx.getImageData(0, 0, width, height);
+  const imageData = ctx.getImageData(0, 0, width, height);
+  if (!options.enhance) return imageData;
+  return Core.enhanceImageData(imageData, { strength: options.strength || 0.68 });
 }
 
 function generateProject() {
@@ -549,12 +604,13 @@ function generateProject() {
     return;
   }
 
-  setStatus("正在本地取色和匹配色号...");
+  const clarityBoost = els.clarityBoost.checked;
+  setStatus(clarityBoost ? "正在本地保留原色、增强轮廓和匹配色号..." : "正在本地取色和匹配色号...");
   els.generateButton.disabled = true;
 
   requestAnimationFrame(() => {
     try {
-      const imageData = getImageDataForPattern();
+      const imageData = getImageDataForPattern(getPatternMaxSide());
       const project = Core.buildPatternFromImageData({
         imageData,
         title: state.imageName || "拼豆图纸",
@@ -563,12 +619,14 @@ function generateProject() {
         palette,
         gridWidth: Number(els.gridWidth.value),
         gridHeight: Number(els.gridHeight.value),
+        clarityBoost,
+        clarityStrength: 0.58,
         removeBackground: els.removeBackground.checked,
         backgroundMode: els.backgroundMode.value,
         sourceName: state.imageName
       });
       setProject(project, true);
-      switchView("editor");
+      switchView("editor", { scroll: true });
       setStatus(`完成：${project.gridWidth}x${project.gridHeight}，共 ${project.totalBeads} 颗。`);
     } catch (error) {
       setStatus(`生成失败：${error.message || "请换一张图片再试"}`);
@@ -612,7 +670,7 @@ function recognizeChartProject() {
         ignoreWatermark: els.ignoreWatermark.checked
       });
       setProject(project, true);
-      switchView("editor");
+      switchView("editor", { scroll: true });
       setStatus(`识别完成：${project.gridWidth}x${project.gridHeight}，共 ${project.totalBeads} 颗。`);
     } catch (error) {
       setStatus(`识别失败：${error.message || "请先裁到网格区域再试"}`);
@@ -625,6 +683,9 @@ function recognizeChartProject() {
 function setProject(project, shouldSave) {
   state.currentProject = project;
   state.selectedColorId = "";
+  state.lastCompletedGuideSectionId = "";
+  state.exportViewTarget = null;
+  els.exportViewer.hidden = true;
   ensureGuideState(project);
   if (shouldSave) {
     localStorage.setItem(STORAGE_KEYS.project, JSON.stringify(project));
@@ -643,9 +704,13 @@ function renderProject() {
   els.canvasTitle.textContent = project.title || "拼豆图纸";
   els.canvasMeta.textContent = `${project.gridWidth} x ${project.gridHeight} · ${project.totalBeads} 颗 · ${project.palettePresetId}`;
 
-  const width = Math.max(420, Math.min(1080, els.patternCanvas.parentElement.clientWidth - 36));
+  const compact = isCompactLayout();
+  const width = getCanvasRenderWidth(els.patternCanvas, { desktopMin: 420, desktopMax: 1080 });
   Core.drawPatternCanvas(els.patternCanvas, project, {
     width,
+    padding: compact ? 10 : 18,
+    axis: compact ? 24 : 34,
+    minCellSize: compact ? (Math.max(project.gridWidth, project.gridHeight) > 48 ? 4 : 5) : 14,
     selectedColorId: state.selectedColorId,
     pixelRatio: window.devicePixelRatio || 1
   });
@@ -661,7 +726,7 @@ function renderEmptyCanvas() {
   const canvas = els.patternCanvas;
   const ctx = canvas.getContext("2d");
   const pixelRatio = window.devicePixelRatio || 1;
-  const width = Math.max(360, Math.min(900, canvas.parentElement.clientWidth - 36));
+  const width = getCanvasRenderWidth(canvas, { desktopMin: 360, desktopMax: 900 });
   const height = Math.max(360, Math.min(560, Math.round(width * 0.62)));
   canvas.width = Math.round(width * pixelRatio);
   canvas.height = Math.round(height * pixelRatio);
@@ -725,9 +790,11 @@ function renderPreview() {
     ctx.fillRect(0, 0, canvas.width, canvas.height);
     return;
   }
-  const width = Math.max(420, Math.min(980, els.previewCanvas.parentElement.clientWidth - 36));
+  const compact = isCompactLayout();
+  const width = getCanvasRenderWidth(els.previewCanvas, { desktopMin: 420, desktopMax: 980 });
   Core.drawPreviewCanvas(els.previewCanvas, state.currentProject, {
     width,
+    padding: compact ? 10 : undefined,
     mode: state.previewMode,
     pixelRatio: window.devicePixelRatio || 1
   });
@@ -737,7 +804,7 @@ function ensureGuideState(project) {
   state.guideSections = Core.buildGuideSections(project);
   const completed = getCompletedGuideSet(project);
   const activeExists = state.guideSections.some((section) => section.id === state.activeGuideSectionId);
-  if (!activeExists || completed.has(state.activeGuideSectionId)) {
+  if (!activeExists) {
     const next = state.guideSections.find((section) => !completed.has(section.id)) || state.guideSections[0];
     state.activeGuideSectionId = next ? next.id : "";
   }
@@ -757,6 +824,16 @@ function getActiveGuideSection() {
   return state.guideSections.find((section) => section.id === state.activeGuideSectionId) || state.guideSections[0];
 }
 
+function getUndoGuideSection(completed) {
+  const active = getActiveGuideSection();
+  if (active && completed.has(active.id)) return active;
+  const lastCompleted = state.guideSections.find((section) => (
+    section.id === state.lastCompletedGuideSectionId && completed.has(section.id)
+  ));
+  if (lastCompleted) return lastCompleted;
+  return state.guideSections.slice().reverse().find((section) => completed.has(section.id));
+}
+
 function renderGuideIfVisible() {
   if (document.getElementById("guideView").classList.contains("active")) {
     renderGuide();
@@ -772,12 +849,13 @@ function renderGuideEmpty() {
   els.guideSteps.innerHTML = "";
   els.markSectionDoneButton.disabled = true;
   els.undoSectionButton.disabled = true;
+  els.undoSectionButton.textContent = "撤销";
   els.resetGuideButton.disabled = true;
 
   const canvas = els.guideCanvas;
   const ctx = canvas.getContext("2d");
   const pixelRatio = window.devicePixelRatio || 1;
-  const width = Math.max(360, Math.min(900, canvas.parentElement.clientWidth - 36));
+  const width = getCanvasRenderWidth(canvas, { desktopMin: 360, desktopMax: 900 });
   const height = Math.max(360, Math.min(560, Math.round(width * 0.62)));
   canvas.width = Math.round(width * pixelRatio);
   canvas.height = Math.round(height * pixelRatio);
@@ -817,9 +895,13 @@ function renderGuide() {
   els.guideProgressFill.style.width = `${progress}%`;
   els.resetGuideButton.disabled = state.guideSections.length === 0 || completedCount === 0;
 
-  const width = Math.max(420, Math.min(1080, els.guideCanvas.parentElement.clientWidth - 36));
+  const compact = isCompactLayout();
+  const width = getCanvasRenderWidth(els.guideCanvas, { desktopMin: 420, desktopMax: 1080 });
   state.guideLayout = Core.drawPatternCanvas(els.guideCanvas, project, {
     width,
+    padding: compact ? 10 : 18,
+    axis: compact ? 24 : 34,
+    minCellSize: 14,
     focusedSection: activeSection,
     guideSections: state.guideSections,
     completedSectionIds: Array.from(completed),
@@ -839,6 +921,7 @@ function renderGuideCurrent(section, completed) {
   }
 
   const isDone = completed.has(section.id);
+  const undoSection = getUndoGuideSection(completed);
   const plan = section.colorPlan.slice(0, 5).map((stat) => `
     <span class="guide-color-chip">
       <span class="swatch" style="background:${stat.hex}"></span>
@@ -856,7 +939,8 @@ function renderGuideCurrent(section, completed) {
     </div>
   `;
   els.markSectionDoneButton.disabled = isDone;
-  els.undoSectionButton.disabled = !isDone;
+  els.undoSectionButton.disabled = !undoSection;
+  els.undoSectionButton.textContent = isDone ? "撤销本块" : "撤销上一块";
 }
 
 function renderGuideSteps(completed) {
@@ -912,6 +996,7 @@ function markActiveSectionDone() {
   if (!project || !section) return;
   const completed = getCompletedGuideSet(project);
   completed.add(section.id);
+  state.lastCompletedGuideSectionId = section.id;
   state.guideProgress[project.id] = { completed: Array.from(completed), updatedAt: Date.now() };
   saveGuideProgress();
 
@@ -925,10 +1010,13 @@ function markActiveSectionDone() {
 
 function undoActiveSection() {
   const project = state.currentProject;
-  const section = getActiveGuideSection();
-  if (!project || !section) return;
+  if (!project) return;
   const completed = getCompletedGuideSet(project);
+  const section = getUndoGuideSection(completed);
+  if (!section) return;
   completed.delete(section.id);
+  state.lastCompletedGuideSectionId = "";
+  state.activeGuideSectionId = section.id;
   state.guideProgress[project.id] = { completed: Array.from(completed), updatedAt: Date.now() };
   saveGuideProgress();
   renderGuide();
@@ -939,6 +1027,7 @@ function resetGuideProgress() {
   const project = state.currentProject;
   if (!project) return;
   delete state.guideProgress[project.id];
+  state.lastCompletedGuideSectionId = "";
   saveGuideProgress();
   state.activeGuideSectionId = "";
   ensureGuideState(project);
@@ -1125,13 +1214,72 @@ function saveImportedPatterns() {
   localStorage.setItem(STORAGE_KEYS.importedPatterns, JSON.stringify(state.importedPatterns || []));
 }
 
-function switchView(viewName) {
+function isCompactLayout() {
+  return window.matchMedia && window.matchMedia("(max-width: 680px)").matches;
+}
+
+function getCanvasRenderWidth(canvas, options) {
+  const compact = isCompactLayout();
+  const inset = compact ? 24 : 36;
+  const available = Math.max(280, canvas.parentElement.clientWidth - inset);
+  if (compact) return available;
+  return Math.max(options.desktopMin, Math.min(options.desktopMax, available));
+}
+
+function scrollWorkspaceIntoView() {
+  if (!isCompactLayout()) return;
+  requestAnimationFrame(() => {
+    els.workspacePanel.scrollIntoView({ block: "start", behavior: "smooth" });
+  });
+}
+
+function switchView(viewName, options = {}) {
   document.querySelectorAll(".tab").forEach((tab) => tab.classList.toggle("active", tab.dataset.view === viewName));
   document.querySelectorAll(".view").forEach((view) => view.classList.toggle("active", view.id === `${viewName}View`));
   if (viewName === "preview") renderPreview();
   if (viewName === "editor") renderProject();
   if (viewName === "guide") renderGuide();
   if (viewName === "library") renderLibrary();
+  if (options.scroll) scrollWorkspaceIntoView();
+}
+
+async function clearAppCache() {
+  const confirmed = window.confirm("清理后会移除上次自动恢复的图纸和拼豆进度，并刷新浏览器静态缓存。我的色库、生成设置和本地图纸库会保留。继续吗？");
+  if (!confirmed) return;
+
+  localStorage.removeItem(STORAGE_KEYS.project);
+  localStorage.removeItem(STORAGE_KEYS.guideProgress);
+  state.currentProject = null;
+  state.selectedColorId = "";
+  state.activeGuideSectionId = "";
+  state.lastCompletedGuideSectionId = "";
+  state.exportViewTarget = null;
+  els.exportViewer.hidden = true;
+  state.guideSections = [];
+  state.guideLayout = null;
+  state.guideProgress = {};
+
+  if ("caches" in window) {
+    try {
+      const keys = await caches.keys();
+      await Promise.all(
+        keys
+          .filter((key) => key.startsWith("pin-bead-helper"))
+          .map((key) => caches.delete(key))
+      );
+    } catch (error) {
+      setStatus("已清理上次图纸；浏览器静态缓存清理失败，可以刷新后再试。");
+      renderEmptyCanvas();
+      renderPreview();
+      switchView("editor", { scroll: true });
+      return;
+    }
+  }
+
+  renderEmptyCanvas();
+  renderPreview();
+  switchView("editor", { scroll: true });
+  setStatus("已清理上次图纸、拼豆进度和静态缓存。");
 }
 
 function downloadProject() {
@@ -1141,15 +1289,133 @@ function downloadProject() {
     return;
   }
 
-  const pages = Core.getExportPages(project, 50);
-  pages.forEach((page, index) => {
-    setTimeout(() => {
-      Core.drawExportCanvas(els.workCanvas, project, { range: page });
-      const suffix = pages.length > 1 ? `-p${page.index}` : "";
-      downloadCanvas(els.workCanvas, `${safeFileName(project.title)}${suffix}.png`);
-    }, index * 120);
+  renderExportPanel(project);
+  els.exportPanel.hidden = false;
+  requestAnimationFrame(() => {
+    els.exportPanel.scrollIntoView({ block: "start", behavior: "smooth" });
   });
-  setStatus(pages.length > 1 ? `已按 ${pages.length} 页导出 PNG。` : "已导出 PNG 图纸。");
+  setStatus("选择色库清单或某个板块查看，下载只是选项。");
+}
+
+function renderExportPanel(project) {
+  const pages = Core.getExportPages(project, EXPORT_BOARD_SIZE);
+  const pageCards = pages.map((page, index) => {
+    const xLabel = `X${page.x + 1}-${page.x + page.width}`;
+    const yLabel = `Y${page.y + 1}-${page.y + page.height}`;
+    return `
+      <article class="export-card">
+        <div>
+          <strong>板块 ${page.index}/${page.total}</strong>
+          <span>${xLabel} / ${yLabel} · ${page.width}x${page.height} · ${page.totalBeads} 颗 · ${page.colorStats.length} 色</span>
+        </div>
+        <div class="export-card-actions">
+          <button class="ghost-button" data-export-action="view" data-export-kind="page" data-export-page="${index}" type="button">查看</button>
+          <button class="ghost-button" data-export-action="download" data-export-kind="page" data-export-page="${index}" type="button">下载</button>
+        </div>
+      </article>
+    `;
+  }).join("") || '<div class="summary-empty">当前图纸没有可导出的非空板块。</div>';
+
+  els.exportGrid.innerHTML = `
+    <article class="export-card featured">
+      <div>
+        <strong>色库清单</strong>
+        <span>${project.colorStats.length} 个色号 · 汇总每种拼豆数量</span>
+      </div>
+      <div class="export-card-actions">
+        <button class="ghost-button" data-export-action="view" data-export-kind="summary" type="button">查看</button>
+        <button class="dark-button" data-export-action="download" data-export-kind="summary" type="button">下载</button>
+      </div>
+    </article>
+    <div class="export-section-title">分块图纸 · 只显示有拼豆的板块 · 每块最多 ${EXPORT_BOARD_SIZE}x${EXPORT_BOARD_SIZE}</div>
+    ${pageCards}
+  `;
+}
+
+function handleExportGridClick(event) {
+  const button = event.target.closest("[data-export-action][data-export-kind]");
+  if (!button || !state.currentProject) return;
+
+  const project = state.currentProject;
+  const baseName = safeFileName(project.title);
+  const kind = button.dataset.exportKind;
+  const action = button.dataset.exportAction;
+  const target = {
+    kind,
+    pageIndex: Number(button.dataset.exportPage)
+  };
+
+  if (action === "view") {
+    openExportViewer(project, target);
+    setStatus("已打开分块预览。");
+    return;
+  }
+
+  if (action === "download") {
+    downloadExportTarget(project, target, baseName);
+    return;
+  }
+}
+
+function openExportViewer(project, target) {
+  state.exportViewTarget = target;
+  renderExportViewCanvas(project, target, els.exportViewerCanvas);
+  els.exportViewer.hidden = false;
+}
+
+function closeExportViewer() {
+  els.exportViewer.hidden = true;
+}
+
+function downloadCurrentExportView() {
+  if (!state.currentProject || !state.exportViewTarget) return;
+  downloadExportTarget(state.currentProject, state.exportViewTarget, safeFileName(state.currentProject.title));
+}
+
+function downloadExportTarget(project, target, baseName) {
+  const kind = target && target.kind;
+  if (kind === "summary") {
+    Core.drawColorStatsCanvas(els.workCanvas, project);
+    downloadCanvas(els.workCanvas, `${baseName}-色库清单.png`);
+    setStatus("已导出色库清单 PNG。");
+    return;
+  }
+
+  if (kind === "page") {
+    const pages = Core.getExportPages(project, EXPORT_BOARD_SIZE);
+    const page = pages[Number(target.pageIndex)];
+    if (!page) return;
+    Core.drawExportCanvas(els.workCanvas, project, { range: page });
+    const suffix = `板块${String(page.index).padStart(2, "0")}-X${page.x + 1}-${page.x + page.width}-Y${page.y + 1}-${page.y + page.height}`;
+    downloadCanvas(els.workCanvas, `${baseName}-${suffix}.png`);
+    setStatus(`已导出 ${suffix}。`);
+  }
+}
+
+function renderExportViewCanvas(project, target, canvas) {
+  const pages = Core.getExportPages(project, EXPORT_BOARD_SIZE);
+  const kind = target && target.kind ? target.kind : "summary";
+
+  if (kind === "summary") {
+    Core.drawColorStatsCanvas(canvas, project);
+    els.exportViewerTitle.textContent = "色库清单";
+    els.exportViewerMeta.textContent = `${project.colorStats.length} 个色号 · ${project.totalBeads} 颗`;
+    return;
+  }
+
+  if (kind === "page") {
+    const page = pages[Number(target.pageIndex)];
+    if (page) {
+      Core.drawExportCanvas(canvas, project, { range: page });
+      els.exportViewerTitle.textContent = `板块 ${page.index}/${page.total}`;
+      els.exportViewerMeta.textContent = `X${page.x + 1}-${page.x + page.width} / Y${page.y + 1}-${page.y + page.height} · ${page.totalBeads} 颗 · ${page.colorStats.length} 色`;
+      return;
+    }
+  }
+
+  Core.drawColorStatsCanvas(canvas, project);
+  els.exportViewerTitle.textContent = "色库清单";
+  els.exportViewerMeta.textContent = `${project.colorStats.length} 个色号 · ${project.totalBeads} 颗`;
 }
 
 function downloadCanvas(canvas, fileName) {

@@ -80,28 +80,39 @@
 
           <label class="switch-row">
             <span>
+              <strong>清晰增强</strong>
+              <small>固定格数时优先保留轮廓和表情</small>
+            </span>
+            <input id="clarityBoost" type="checkbox" checked />
+          </label>
+
+          <label class="switch-row">
+            <span>
               <strong>一键去背景</strong>
               <small>白底 / 黑底自动识别</small>
             </span>
             <input id="removeBackground" type="checkbox" checked />
           </label>
 
-          <label class="field">
-            <span>背景判断</span>
-            <select id="backgroundMode">
-              <option value="auto">自动识别</option>
-              <option value="white">白底</option>
-              <option value="black">黑底</option>
-            </select>
-          </label>
+          <details class="advanced-settings">
+            <summary>高级识别选项</summary>
+            <label class="field">
+              <span>背景判断</span>
+              <select id="backgroundMode">
+                <option value="auto">自动识别</option>
+                <option value="white">白底</option>
+                <option value="black">黑底</option>
+              </select>
+            </label>
 
-          <label class="switch-row">
-            <span>
-              <strong>忽略水印干扰</strong>
-              <small>仅用于现成图纸识别，不改原图</small>
-            </span>
-            <input id="ignoreWatermark" type="checkbox" checked />
-          </label>
+            <label class="switch-row">
+              <span>
+                <strong>忽略水印干扰</strong>
+                <small>仅用于现成图纸识别，不改原图</small>
+              </span>
+              <input id="ignoreWatermark" type="checkbox" checked />
+            </label>
+          </details>
 
           <button class="primary-button" id="generateButton" type="button">生成拼豆图纸</button>
           <button class="ghost-button full-button" id="recognizeChartButton" type="button">识别现成图纸</button>
@@ -122,13 +133,14 @@
         </section>
       </section>
 
-      <section class="workspace" aria-label="拼豆图纸工作区">
+      <section class="workspace" id="workspacePanel" aria-label="拼豆图纸工作区">
         <header class="topbar">
           <div>
             <p class="eyebrow">LOCAL WEB APP · NO SERVER FEE</p>
             <h2 id="projectTitle">专业图纸工作台</h2>
           </div>
           <div class="top-actions">
+            <button class="ghost-button" id="clearCacheButton" type="button">清理缓存</button>
             <button class="ghost-button" id="shareButton" type="button">分享</button>
             <button class="dark-button" id="downloadButton" type="button">下载 PNG</button>
           </div>
@@ -140,6 +152,15 @@
           <button class="tab" data-view="preview" type="button">预览</button>
           <button class="tab" data-view="library" type="button">图库</button>
         </nav>
+
+        <section class="export-panel" id="exportPanel" hidden>
+          <div class="panel-head">
+            <h2>导出 PNG</h2>
+            <button class="text-button" id="closeExportPanelButton" type="button">关闭</button>
+          </div>
+          <p class="hint">先弹窗查看分块图纸，确认后再按需下载。</p>
+          <div class="export-grid" id="exportGrid"></div>
+        </section>
 
         <section class="view active" id="editorView">
           <div class="canvas-card">
@@ -254,6 +275,24 @@
         </section>
       </section>
     </main>
+
+    <section class="modal-backdrop" id="exportViewer" hidden>
+      <div class="modal-panel" role="dialog" aria-modal="true" aria-labelledby="exportViewerTitle">
+        <div class="modal-head">
+          <div>
+            <strong id="exportViewerTitle">分块预览</strong>
+            <span id="exportViewerMeta">选择一个板块查看</span>
+          </div>
+          <button class="text-button" id="closeExportViewerButton" type="button">关闭</button>
+        </div>
+        <div class="modal-canvas-scroll">
+          <canvas id="exportViewerCanvas" width="960" height="720" aria-label="分块预览画布"></canvas>
+        </div>
+        <div class="modal-actions">
+          <button class="dark-button" id="downloadViewedExportButton" type="button">下载当前</button>
+        </div>
+      </div>
+    </section>
 
     <canvas id="workCanvas" hidden></canvas>
     <script src="./core.js"></script>
