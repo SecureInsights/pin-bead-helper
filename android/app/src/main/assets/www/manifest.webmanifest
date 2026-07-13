@@ -1,6 +1,6 @@
 {
-  "name": "拼豆小助手",
-  "short_name": "拼豆",
+  "name": "拼豆助手",
+  "short_name": "拼豆助手",
   "description": "本地生成拼豆图纸、色块统计、熨烫预览和 PNG 导出。",
   "start_url": "./",
   "display": "standalone",

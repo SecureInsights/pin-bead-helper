@@ -47,8 +47,13 @@ jobs:
         working-directory: android
         run: ./gradlew assembleDebug
 
+      - name: Name APK
+        run: |
+          mkdir -p build-output
+          cp android/app/build/outputs/apk/debug/app-debug.apk "build-output/拼豆助手.apk"
+
       - name: Upload debug APK
         uses: actions/upload-artifact@v7
         with:
-          name: pin-bead-helper-debug-apk
-          path: android/app/build/outputs/apk/debug/*.apk
+          name: 拼豆助手
+          path: build-output/拼豆助手.apk
