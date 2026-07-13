@@ -135,6 +135,29 @@ function testSubjectCropFindsForegroundBounds() {
   assert.ok(crop.height < 0.75, "subject crop should be tighter than the full image height");
 }
 
+function testAutoGridKeepsSmallPixelArtSize() {
+  const size = Core.estimateGridSize(58, 58, 36, { autoTarget: true });
+  const largerSize = Core.estimateGridSize(150, 120, 36, { autoTarget: true, maxLongSide: 160 });
+  assert.equal(size.gridWidth, 58, "small pixel-art uploads should keep source width as bead width");
+  assert.equal(size.gridHeight, 58, "small pixel-art uploads should keep source height as bead height");
+  assert.equal(largerSize.gridWidth, 150, "pixel-art uploads within the UI limit should keep source width");
+  assert.equal(largerSize.gridHeight, 120, "pixel-art uploads within the UI limit should keep source height");
+}
+
+function testAutoGridUsesImageDetail() {
+  const flat = makeImageData(100, 100, () => [180, 180, 180, 255]);
+  const detailed = makeImageData(100, 100, (x, y) => (
+    (x + y) % 2 === 0 ? [30, 30, 30, 255] : [235, 235, 235, 255]
+  ));
+  const flatScore = Core.estimateImageDetail(flat);
+  const detailedScore = Core.estimateImageDetail(detailed);
+  const flatSize = Core.estimateGridSize(1200, 1200, null, { autoTarget: true, detailScore: flatScore });
+  const detailedSize = Core.estimateGridSize(1200, 1200, null, { autoTarget: true, detailScore: detailedScore });
+
+  assert.ok(detailedScore > flatScore, "detail scoring should detect edge-heavy images");
+  assert.ok(detailedSize.gridWidth > flatSize.gridWidth, "auto grid should suggest more beads for detailed images");
+}
+
 function testGuideSections() {
   const imageData = makeImageData(32, 24, (x, y) => {
     if (x < 4 || y < 4 || x > 27 || y > 19) return [255, 255, 255, 255];
@@ -283,6 +306,8 @@ testClarityBoostPreservesThinDetails();
 testImageEnhancementRaisesEdgeContrast();
 testImageEnhancementKeepsFlatColor();
 testSubjectCropFindsForegroundBounds();
+testAutoGridKeepsSmallPixelArtSize();
+testAutoGridUsesImageDetail();
 testGuideSections();
 testChartRecognition();
 testLocalLibraryPatterns();

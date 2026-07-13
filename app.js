@@ -292,8 +292,8 @@ async function loadImageFile(file) {
   els.sourcePreview.hidden = false;
   els.cropPanel.hidden = false;
   renderCropCanvas();
-  syncGridToCrop({ preferChart: false, silent: true });
-  setStatus(`已读取 ${image.naturalWidth}x${image.naturalHeight}，可以生成图纸。`);
+  const suggestion = syncGridToCrop({ preferChart: false, silent: true });
+  setStatus(`已读取 ${image.naturalWidth}x${image.naturalHeight}，已建议 ${suggestion.gridWidth}x${suggestion.gridHeight} 格。`);
 }
 
 function loadImage(src) {
@@ -453,7 +453,7 @@ function resetCrop() {
   state.cropRect = { x: 0, y: 0, width: 1, height: 1 };
   renderCropCanvas();
   syncGridToCrop({ preferChart: false, silent: true });
-  setStatus("裁剪区域已恢复为全图，格数已按比例更新。");
+  setStatus("裁剪区域已恢复为全图，格数已按上传图片细节更新。");
 }
 
 function centerCropSubject() {
@@ -475,8 +475,8 @@ function centerCropSubject() {
   renderCropCanvas();
   syncGridToCrop({ preferChart: false, silent: true });
   setStatus(estimate && estimate.confidence >= 0.25
-    ? "已按主体轮廓裁剪并更新格数，可以继续拖动微调。"
-    : "未稳定识别主体，已居中裁剪并按比例更新格数。");
+    ? "已按主体轮廓裁剪，并按上传图片细节更新格数。"
+    : "未稳定识别主体，已居中裁剪，并按上传图片细节更新格数。");
 }
 
 function autoCropChart() {
@@ -515,15 +515,21 @@ function syncGridToCrop(options = {}) {
     if (estimate.gridWidth >= 4 && estimate.gridHeight >= 4 && estimate.confidence >= 0.35) {
       updateGridInputs(estimate.gridWidth, estimate.gridHeight);
       if (!options.silent) setStatus(`已按裁剪网格更新为 ${estimate.gridWidth}x${estimate.gridHeight}。`);
-      return;
+      return { gridWidth: estimate.gridWidth, gridHeight: estimate.gridHeight, source: "chart" };
     }
   }
 
   const crop = getCropSourceRect();
-  const currentLongSide = Math.max(Number(els.gridWidth.value) || 48, Number(els.gridHeight.value) || 48, 24);
-  const size = Core.estimateGridSize(crop.width, crop.height, Math.min(120, currentLongSide));
+  const detailData = getImageDataForPattern(420);
+  const detailScore = Core.estimateImageDetail(detailData);
+  const size = Core.estimateGridSize(crop.width, crop.height, null, {
+    autoTarget: true,
+    detailScore,
+    maxLongSide: 160
+  });
   updateGridInputs(size.gridWidth, size.gridHeight);
-  if (!options.silent) setStatus(`已按裁剪比例更新为 ${size.gridWidth}x${size.gridHeight}。`);
+  if (!options.silent) setStatus(`已按上传图片比例和细节推荐为 ${size.gridWidth}x${size.gridHeight}。`);
+  return { ...size, source: "image", detailScore };
 }
 
 function updateGridInputs(gridWidth, gridHeight) {
@@ -559,8 +565,7 @@ function getCropSourceRect() {
 
 function suggestGridSize() {
   if (!state.imageSize) {
-    els.gridWidth.value = 36;
-    els.gridHeight.value = 36;
+    setStatus("先上传图片，再按图片细节自动推荐格数。");
     return;
   }
   syncGridToCrop({ preferChart: true, silent: false });

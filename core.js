@@ -284,15 +284,74 @@
     );
   }
 
-  function estimateGridSize(imageWidth, imageHeight, targetLongSide) {
-    const target = targetLongSide || 48;
+  function estimateImageDetail(imageData) {
+    const data = imageData && imageData.data;
+    const width = imageData && imageData.width;
+    const height = imageData && imageData.height;
+    if (!data || !width || !height || width < 2 || height < 2) return 0;
+
+    const stepX = Math.max(1, Math.floor(width / 120));
+    const stepY = Math.max(1, Math.floor(height / 120));
+    const buckets = new Set();
+    let samples = 0;
+    let edgeTotal = 0;
+    let edgeHits = 0;
+
+    for (let y = 0; y < height - 1; y += stepY) {
+      for (let x = 0; x < width - 1; x += stepX) {
+        const index = ((y * width) + x) * 4;
+        const right = ((y * width) + Math.min(width - 1, x + stepX)) * 4;
+        const down = ((Math.min(height - 1, y + stepY) * width) + x) * 4;
+        const rgb = [data[index], data[index + 1], data[index + 2]];
+        const hereLuma = luminance(rgb);
+        const rightLuma = luminance([data[right], data[right + 1], data[right + 2]]);
+        const downLuma = luminance([data[down], data[down + 1], data[down + 2]]);
+        const edge = Math.max(Math.abs(hereLuma - rightLuma), Math.abs(hereLuma - downLuma));
+
+        edgeTotal += Math.min(edge / 72, 1);
+        if (edge > 18) edgeHits += 1;
+        buckets.add(`${data[index] >> 5}-${data[index + 1] >> 5}-${data[index + 2] >> 5}`);
+        samples += 1;
+      }
+    }
+
+    if (!samples) return 0;
+    const meanEdge = edgeTotal / samples;
+    const edgeRatio = edgeHits / samples;
+    const colorVariety = Math.min(1, buckets.size / Math.max(8, Math.sqrt(samples)));
+    return clamp((edgeRatio * 0.52) + (meanEdge * 0.34) + (colorVariety * 0.14), 0, 1);
+  }
+
+  function estimateAutoLongSide(imageWidth, imageHeight, options) {
+    const imageLongSide = Math.max(imageWidth, imageHeight);
+    const maxLongSide = options.maxLongSide || 120;
+    const minLongSide = options.minLongSide || 16;
+    const detailScore = clamp(options.detailScore || 0, 0, 1);
+    const pixelBonus = imageLongSide >= 2400 ? 16 : imageLongSide >= 1200 ? 10 : imageLongSide >= 640 ? 6 : 0;
+    const target = 48 + pixelBonus + Math.round(detailScore * 34);
+    return clamp(Math.round(target / 2) * 2, minLongSide, maxLongSide);
+  }
+
+  function estimateGridSize(imageWidth, imageHeight, targetLongSide, options = {}) {
     if (!imageWidth || !imageHeight) {
       return { gridWidth: 36, gridHeight: 36 };
     }
-    const scale = target / Math.max(imageWidth, imageHeight);
+
+    const maxLongSide = options.maxLongSide || 120;
+    const minLongSide = options.minLongSide || 16;
+    const imageLongSide = Math.max(imageWidth, imageHeight);
+    const preserveSourcePixels = options.preserveSourcePixels !== false;
+    const target = options.autoTarget
+      ? estimateAutoLongSide(imageWidth, imageHeight, options)
+      : (targetLongSide || 48);
+    const longSide = preserveSourcePixels && imageLongSide >= minLongSide && imageLongSide <= maxLongSide
+      ? imageLongSide
+      : clamp(target, minLongSide, maxLongSide);
+    const scale = longSide / imageLongSide;
+
     return {
-      gridWidth: clamp(Math.round(imageWidth * scale), 16, 120),
-      gridHeight: clamp(Math.round(imageHeight * scale), 16, 120)
+      gridWidth: clamp(Math.round(imageWidth * scale), 1, maxLongSide),
+      gridHeight: clamp(Math.round(imageHeight * scale), 1, maxLongSide)
     };
   }
 
@@ -1746,6 +1805,7 @@
     getPaletteMap,
     getColorsForPreset,
     estimateGridSize,
+    estimateImageDetail,
     estimateSubjectCrop,
     enhanceImageData,
     buildPatternFromImageData,
