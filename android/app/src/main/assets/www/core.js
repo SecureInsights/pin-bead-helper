@@ -1580,7 +1580,7 @@
     const cellsHigh = range ? range.height : project.gridHeight;
     const stats = range && range.colorStats ? range.colorStats : project.colorStats;
     const totalBeads = range && Number.isFinite(range.totalBeads) ? range.totalBeads : project.totalBeads;
-    const cellSize = Math.max(14, Math.min(28, Math.floor(1180 / Math.max(cellsWide, cellsHigh))));
+    const cellSize = Math.max(17, Math.min(28, Math.floor(1180 / Math.max(cellsWide, cellsHigh))));
     const margin = 54;
     const axis = 36;
     const summaryRows = Math.max(1, Math.ceil(stats.length / 8));
@@ -1627,11 +1627,11 @@
         if (cell && !cell.isTransparent) {
           ctx.fillStyle = cell.hex;
           ctx.fillRect(drawX, drawY, cellSize, cellSize);
-          if (cellSize >= 17) {
-            ctx.fillStyle = textColorFor(cell.rgb);
-            ctx.font = `${cellSize >= 22 ? 13 : 10}px -apple-system, BlinkMacSystemFont, sans-serif`;
-            ctx.fillText(cell.colorId, drawX + cellSize / 2, drawY + cellSize / 2);
-          }
+          // 色号一律绘制：短编号（如 B5）保证小格子也放得下
+          const label = cell.shortId || cell.colorId;
+          ctx.fillStyle = textColorFor(cell.rgb);
+          ctx.font = `${fitCellLabelFont(ctx, label, cellSize)}px -apple-system, BlinkMacSystemFont, sans-serif`;
+          ctx.fillText(label, drawX + cellSize / 2, drawY + cellSize / 2 + 0.5);
         }
       }
     }
@@ -1690,8 +1690,9 @@
     });
   }
 
-  function drawColorStatsCanvas(canvas, project) {
+  function drawColorStatsCanvas(canvas, project, options) {
     const ctx = canvas.getContext("2d");
+    const pixelRatio = options && options.pixelRatio ? options.pixelRatio : 1;
     const margin = 54;
     const width = 1200;
     const columns = 4;
@@ -1700,7 +1701,7 @@
     const itemHeight = 78;
     const rows = Math.max(1, Math.ceil(project.colorStats.length / columns));
     const height = margin * 2 + 112 + rows * itemHeight;
-    setupCanvas(canvas, ctx, width, height, 1);
+    setupCanvas(canvas, ctx, width, height, pixelRatio);
 
     ctx.fillStyle = "#ffffff";
     ctx.fillRect(0, 0, width, height);

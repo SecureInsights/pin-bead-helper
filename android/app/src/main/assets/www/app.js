@@ -1622,14 +1622,14 @@ function renderExportViewCanvas(project, target, canvas) {
   const kind = target && target.kind ? target.kind : "summary";
 
   if (kind === "full") {
-    Core.drawExportCanvas(canvas, project, {});
+    Core.drawExportCanvas(canvas, project, { pixelRatio: window.devicePixelRatio || 1 });
     els.exportViewerTitle.textContent = "整图";
     els.exportViewerMeta.textContent = `${project.gridWidth}x${project.gridHeight} · ${project.totalBeads} 颗`;
     return;
   }
 
   if (kind === "summary") {
-    Core.drawColorStatsCanvas(canvas, project);
+    Core.drawColorStatsCanvas(canvas, project, { pixelRatio: window.devicePixelRatio || 1 });
     els.exportViewerTitle.textContent = "色库清单";
     els.exportViewerMeta.textContent = `${project.colorStats.length} 个色号 · ${project.totalBeads} 颗`;
     return;
@@ -1638,14 +1638,14 @@ function renderExportViewCanvas(project, target, canvas) {
   if (kind === "page") {
     const page = pages[Number(target.pageIndex)];
     if (page) {
-      Core.drawExportCanvas(canvas, project, { range: page });
+      Core.drawExportCanvas(canvas, project, { range: page, pixelRatio: window.devicePixelRatio || 1 });
       els.exportViewerTitle.textContent = `板块 ${page.index}/${page.total}`;
       els.exportViewerMeta.textContent = `X${page.x + 1}-${page.x + page.width} / Y${page.y + 1}-${page.y + page.height} · ${page.totalBeads} 颗 · ${page.colorStats.length} 色`;
       return;
     }
   }
 
-  Core.drawColorStatsCanvas(canvas, project);
+  Core.drawColorStatsCanvas(canvas, project, { pixelRatio: window.devicePixelRatio || 1 });
   els.exportViewerTitle.textContent = "色库清单";
   els.exportViewerMeta.textContent = `${project.colorStats.length} 个色号 · ${project.totalBeads} 颗`;
 }
