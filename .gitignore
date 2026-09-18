@@ -6,6 +6,10 @@ node_modules/
 .android-sdk/
 .gradle/
 
+# Local dev server artifacts
+server.out.log
+server.err.log
+
 # Android build outputs
 android/.gradle/
 android/app/build/

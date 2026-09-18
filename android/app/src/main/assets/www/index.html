@@ -14,14 +14,20 @@
     <link rel="stylesheet" href="./styles.css" />
   </head>
   <body>
-    <main class="app-shell">
-      <section class="sidebar" aria-label="项目设置">
+    <main class="app-shell" id="appShell">
+      <section class="sidebar" id="sidebarPanel" aria-label="项目设置">
         <div class="brand">
           <div class="brand-mark">拼</div>
           <div>
             <p class="eyebrow">PIN BEAD STUDIO</p>
             <h1>拼豆小助手</h1>
           </div>
+          <button class="text-button sidebar-close" id="closeSidebarButton" type="button" aria-label="收起设置栏">✕</button>
+        </div>
+
+        <div class="sidebar-quick">
+          <button class="quick-upload" id="quickUploadButton" type="button">上传图片</button>
+          <button class="quick-generate" id="quickGenerateButton" type="button">生成图纸</button>
         </div>
 
         <div class="drop-zone" id="dropZone">
@@ -136,14 +142,39 @@
 
       <section class="workspace" id="workspacePanel" aria-label="拼豆图纸工作区">
         <header class="topbar">
-          <div>
-            <p class="eyebrow">LOCAL WEB APP · NO SERVER FEE</p>
-            <h2 id="projectTitle">专业图纸工作台</h2>
+          <div class="topbar-lead">
+            <button
+              class="ghost-button sidebar-toggle"
+              id="toggleSidebarButton"
+              type="button"
+              aria-expanded="false"
+              aria-controls="sidebarPanel"
+              aria-label="展开设置栏"
+              title="设置"
+            >⚙</button>
+            <div>
+              <p class="eyebrow">LOCAL WEB APP · NO SERVER FEE</p>
+              <h2 id="projectTitle">专业图纸工作台</h2>
+            </div>
           </div>
           <div class="top-actions">
             <button class="ghost-button" id="clearCacheButton" type="button">清理缓存</button>
             <button class="ghost-button" id="shareButton" type="button">分享</button>
             <button class="dark-button" id="downloadButton" type="button">下载 PNG</button>
+          </div>
+          <div class="more-actions">
+            <button
+              class="ghost-button more-actions-button"
+              id="moreActionsButton"
+              type="button"
+              aria-expanded="false"
+              aria-label="更多操作"
+            >⋯</button>
+            <div class="more-actions-menu" id="moreActionsMenu" hidden>
+              <button type="button" data-more="downloadButton">下载 PNG</button>
+              <button type="button" data-more="shareButton">分享</button>
+              <button type="button" data-more="clearCacheButton">清理缓存</button>
+            </div>
           </div>
         </header>
 
@@ -152,6 +183,7 @@
           <button class="tab" data-view="guide" type="button">指导</button>
           <button class="tab" data-view="preview" type="button">预览</button>
           <button class="tab" data-view="library" type="button">图库</button>
+          <button class="tab tab-settings" data-action="openSidebar" type="button" aria-label="打开设置栏">设置</button>
         </nav>
 
         <section class="export-panel" id="exportPanel" hidden>
@@ -173,12 +205,19 @@
               <button class="ghost-button" id="fitButton" type="button">适配屏幕</button>
             </div>
             <canvas id="patternCanvas" width="960" height="720" aria-label="拼豆图纸画布"></canvas>
+            <div class="sample-hints" id="sampleHints" hidden></div>
           </div>
 
-          <aside class="stats-panel">
+          <aside class="stats-panel collapsible-col" id="statsPanel" data-col-label="色块汇总">
             <div class="panel-head">
               <h2>色块汇总</h2>
-              <button class="text-button" id="clearHighlightButton" type="button">取消高亮</button>
+              <div class="panel-head-actions">
+                <button class="text-button" id="clearHighlightButton" type="button">取消高亮</button>
+                <button class="col-toggle" type="button" data-col="editor" aria-label="收起色块汇总" title="收起">»</button>
+              </div>
+            </div>
+            <div class="summary-search">
+              <input id="summarySearch" type="search" placeholder="搜索色号，例如 A9 / H6" aria-label="搜索色号" />
             </div>
             <div class="summary-grid" id="summaryGrid"></div>
             <div class="missing-box" id="missingBox" hidden></div>
@@ -186,7 +225,7 @@
         </section>
 
         <section class="view" id="guideView">
-          <div class="guide-layout">
+          <div class="guide-layout" id="guideLayout">
             <div class="canvas-card">
               <div class="canvas-toolbar">
                 <div>
@@ -198,10 +237,13 @@
               <canvas id="guideCanvas" width="960" height="720" aria-label="拼豆指导画布"></canvas>
             </div>
 
-            <aside class="guide-panel">
+            <aside class="guide-panel collapsible-col" id="guidePanel" data-col-label="智能指导">
               <div class="panel-head">
                 <h2>智能指导</h2>
-                <span class="guide-pill" id="guideProgressText">0 / 0</span>
+                <div class="panel-head-actions">
+                  <span class="guide-pill" id="guideProgressText">0 / 0</span>
+                  <button class="col-toggle" type="button" data-col="guide" aria-label="收起指导面板" title="收起">»</button>
+                </div>
               </div>
               <div class="progress-track" aria-hidden="true">
                 <span id="guideProgressFill"></span>
@@ -217,7 +259,7 @@
         </section>
 
         <section class="view" id="previewView">
-          <div class="preview-layout">
+          <div class="preview-layout" id="previewLayout">
             <div class="canvas-card">
               <div class="canvas-toolbar">
                 <div>
@@ -227,7 +269,8 @@
               </div>
               <canvas id="previewCanvas" width="900" height="720" aria-label="拼豆熨烫预览"></canvas>
             </div>
-            <div class="mode-list" id="previewModes">
+            <div class="mode-list collapsible-col" id="previewModes" data-col-label="熨烫模式">
+              <button class="col-toggle mode-col-toggle" type="button" data-col="preview" aria-label="收起熨烫模式" title="收起">»</button>
               <button class="mode-card active" data-mode="beads" type="button">
                 <strong>原豆</strong>
                 <span>圆孔颗粒质感</span>
@@ -276,6 +319,8 @@
         </section>
       </section>
     </main>
+
+    <div class="sidebar-backdrop" id="sidebarBackdrop" hidden></div>
 
     <section class="modal-backdrop" id="exportViewer" hidden>
       <div class="modal-panel" role="dialog" aria-modal="true" aria-labelledby="exportViewerTitle">

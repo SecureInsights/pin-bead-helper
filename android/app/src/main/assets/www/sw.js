@@ -1,4 +1,4 @@
-const CACHE_NAME = "pin-bead-helper-v21";
+const CACHE_NAME = "pin-bead-helper-v22";
 const ASSETS = [
   "./",
   "./index.html",

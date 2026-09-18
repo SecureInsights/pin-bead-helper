@@ -5,13 +5,24 @@ const STORAGE_KEYS = {
   settings: "pin_bead_helper_settings",
   project: "pin_bead_helper_project",
   guideProgress: "pin_bead_helper_guide_progress",
-  importedPatterns: "pin_bead_helper_imported_patterns"
+  importedPatterns: "pin_bead_helper_imported_patterns",
+  uiSidebar: "pin_bead_helper_ui_sidebar",
+  uiCols: "pin_bead_helper_ui_cols"
 };
 
 const EXPORT_BOARD_SIZE = 29;
 const $ = (id) => document.getElementById(id);
 
 const els = {
+  appShell: $("appShell"),
+  sidebarPanel: $("sidebarPanel"),
+  sidebarBackdrop: $("sidebarBackdrop"),
+  toggleSidebarButton: $("toggleSidebarButton"),
+  closeSidebarButton: $("closeSidebarButton"),
+  moreActionsButton: $("moreActionsButton"),
+  moreActionsMenu: $("moreActionsMenu"),
+  quickUploadButton: $("quickUploadButton"),
+  quickGenerateButton: $("quickGenerateButton"),
   imageInput: $("imageInput"),
   dropZone: $("dropZone"),
   sourcePreview: $("sourcePreview"),
@@ -40,10 +51,17 @@ const els = {
   canvasTitle: $("canvasTitle"),
   canvasMeta: $("canvasMeta"),
   workspacePanel: $("workspacePanel"),
+  editorView: $("editorView"),
+  statsPanel: $("statsPanel"),
+  guideLayout: $("guideLayout"),
+  guidePanel: $("guidePanel"),
+  previewLayout: $("previewLayout"),
   patternCanvas: $("patternCanvas"),
+  sampleHints: $("sampleHints"),
   previewCanvas: $("previewCanvas"),
   workCanvas: $("workCanvas"),
   summaryGrid: $("summaryGrid"),
+  summarySearch: $("summarySearch"),
   missingBox: $("missingBox"),
   clearHighlightButton: $("clearHighlightButton"),
   clearCacheButton: $("clearCacheButton"),
@@ -78,6 +96,8 @@ const els = {
   downloadViewedExportButton: $("downloadViewedExportButton")
 };
 
+const desktopQuery = window.matchMedia("(min-width: 1081px)");
+
 const state = {
   image: null,
   imageName: "",
@@ -86,6 +106,8 @@ const state = {
   cropRect: { x: 0, y: 0, width: 1, height: 1 },
   cropLayout: null,
   cropDrag: null,
+  sidebarOpen: loadJson(STORAGE_KEYS.uiSidebar, null),
+  colStates: loadJson(STORAGE_KEYS.uiCols, {}),
   currentProject: null,
   selectedColorId: "",
   previewMode: "beads",
@@ -109,6 +131,12 @@ const state = {
   })
 };
 
+const COL_LAYOUTS = {
+  editor: { col: "statsPanel", layout: "editorView", label: "色块汇总" },
+  guide: { col: "guidePanel", layout: "guideLayout", label: "智能指导" },
+  preview: { col: "previewModes", layout: "previewLayout", label: "熨烫模式" }
+};
+
 boot();
 
 function boot() {
@@ -126,6 +154,9 @@ function boot() {
     renderEmptyCanvas();
   }
 
+  initSidebar(Boolean(savedProject && savedProject.cells));
+  initCollapsibleCols();
+
   if ("serviceWorker" in navigator) {
     navigator.serviceWorker.register("./sw.js").catch(() => {});
   }
@@ -139,6 +170,94 @@ function restoreSettings() {
   els.removeBackground.checked = state.settings.removeBackground !== false;
   els.backgroundMode.value = state.settings.backgroundMode || "auto";
   els.ignoreWatermark.checked = state.settings.ignoreWatermark !== false;
+}
+
+function initSidebar(hasProject) {
+  const saved = state.sidebarOpen;
+  const initialOpen = typeof saved === "boolean" ? saved : !hasProject;
+  applySidebarState(initialOpen, { persist: true });
+
+  els.toggleSidebarButton.addEventListener("click", () => setSidebarOpen(!state.sidebarOpen));
+  els.closeSidebarButton.addEventListener("click", () => setSidebarOpen(false));
+  els.sidebarBackdrop.addEventListener("click", () => setSidebarOpen(false));
+
+  document.addEventListener("keydown", (event) => {
+    if (event.key === "Escape" && state.sidebarOpen) setSidebarOpen(false);
+  });
+
+  const handleBreakpoint = () => {
+    setSidebarOpen(false, { persist: false });
+  };
+  if (desktopQuery.addEventListener) {
+    desktopQuery.addEventListener("change", handleBreakpoint);
+  } else if (desktopQuery.addListener) {
+    desktopQuery.addListener(handleBreakpoint);
+  }
+}
+
+function setSidebarOpen(open, options = {}) {
+  applySidebarState(open, { persist: options.persist !== false });
+}
+
+function applySidebarState(open, options = {}) {
+  state.sidebarOpen = open;
+  els.appShell.classList.toggle("sidebar-open", open);
+  els.sidebarBackdrop.classList.toggle("visible", open);
+  els.sidebarBackdrop.hidden = desktopQuery.matches;
+  els.toggleSidebarButton.setAttribute("aria-expanded", String(open));
+  els.toggleSidebarButton.setAttribute("aria-label", open ? "收起设置栏" : "展开设置栏");
+  if (options.persist) {
+    try {
+      localStorage.setItem(STORAGE_KEYS.uiSidebar, JSON.stringify(open));
+    } catch (error) {
+      // 存储不可用时忽略，仅影响刷新后保持状态
+    }
+  }
+  requestAnimationFrame(() => {
+    renderProject();
+    renderCropCanvas();
+  });
+}
+
+function initCollapsibleCols() {
+  document.querySelectorAll(".col-toggle").forEach((button) => {
+    button.addEventListener("click", () => toggleCol(button.dataset.col));
+    applyColState(button.dataset.col, state.colStates[button.dataset.col] === true);
+  });
+}
+
+function toggleCol(name) {
+  const collapsed = state.colStates[name] !== true;
+  applyColState(name, collapsed);
+  state.colStates[name] = collapsed;
+  try {
+    localStorage.setItem(STORAGE_KEYS.uiCols, JSON.stringify(state.colStates));
+  } catch (error) {
+    // 存储不可用时忽略，仅影响刷新后保持状态
+  }
+}
+
+function applyColState(name, collapsed) {
+  const config = COL_LAYOUTS[name];
+  if (!config) return;
+  const col = els[config.col];
+  const layout = els[config.layout];
+  if (!col || !layout) return;
+
+  col.classList.toggle("col-collapsed", collapsed);
+  layout.classList.toggle("col-collapsed-layout", collapsed);
+
+  const button = col.querySelector(`.col-toggle[data-col="${name}"]`);
+  if (button) {
+    button.setAttribute("aria-label", collapsed ? `展开${config.label}` : `收起${config.label}`);
+    button.title = collapsed ? "展开" : "收起";
+  }
+
+  requestAnimationFrame(() => {
+    if (name === "editor") renderProject();
+    if (name === "guide") renderGuide();
+    if (name === "preview") renderPreview();
+  });
 }
 
 function bindEvents() {
@@ -226,6 +345,9 @@ function bindEvents() {
     state.selectedColorId = "";
     renderProject();
   });
+  els.summarySearch.addEventListener("input", () => {
+    if (state.currentProject) renderSummary();
+  });
   els.fitButton.addEventListener("click", renderProject);
   els.clearCacheButton.addEventListener("click", clearAppCache);
   els.downloadButton.addEventListener("click", downloadProject);
@@ -250,7 +372,40 @@ function bindEvents() {
   els.saveCurrentPatternButton.addEventListener("click", saveCurrentProjectToLibrary);
 
   document.querySelectorAll(".tab").forEach((tab) => {
+    if (tab.dataset.action === "openSidebar") {
+      tab.addEventListener("click", () => setSidebarOpen(true));
+      return;
+    }
     tab.addEventListener("click", () => switchView(tab.dataset.view, { scroll: true }));
+  });
+
+  els.quickUploadButton.addEventListener("click", () => els.imageInput.click());
+  els.quickGenerateButton.addEventListener("click", () => {
+    generateProject();
+    if (!desktopQuery.matches) setSidebarOpen(false);
+  });
+
+  els.moreActionsButton.addEventListener("click", () => {
+    const open = els.moreActionsMenu.hidden;
+    els.moreActionsMenu.hidden = !open;
+    els.moreActionsButton.setAttribute("aria-expanded", String(open));
+  });
+
+  els.moreActionsMenu.addEventListener("click", (event) => {
+    const button = event.target.closest("[data-more]");
+    if (!button) return;
+    els.moreActionsMenu.hidden = true;
+    els.moreActionsButton.setAttribute("aria-expanded", "false");
+    const target = $(button.dataset.more);
+    if (target) target.click();
+  });
+
+  document.addEventListener("click", (event) => {
+    if (els.moreActionsMenu.hidden) return;
+    if (!event.target.closest(".more-actions")) {
+      els.moreActionsMenu.hidden = true;
+      els.moreActionsButton.setAttribute("aria-expanded", "false");
+    }
   });
 
   els.previewModes.addEventListener("click", (event) => {
@@ -704,6 +859,8 @@ function renderProject() {
     return;
   }
 
+  els.sampleHints.hidden = true;
+
   const project = state.currentProject;
   els.projectTitle.textContent = project.title || "拼豆图纸";
   els.canvasTitle.textContent = project.title || "拼豆图纸";
@@ -749,21 +906,65 @@ function renderEmptyCanvas() {
   ctx.fillText("带坐标轴和色号的拼豆图纸", width / 2, height / 2 + 18);
   els.summaryGrid.innerHTML = '<div class="summary-empty">生成图纸后，点选任意色号就能高亮对应格子。</div>';
   els.missingBox.hidden = true;
+  renderSampleHints();
   renderGuideEmpty();
+}
+
+function renderSampleHints() {
+  const patterns = (Core.LOCAL_LIBRARY_PATTERNS || []).slice(0, 3);
+  if (!patterns.length) {
+    els.sampleHints.hidden = true;
+    return;
+  }
+
+  els.sampleHints.hidden = false;
+  els.sampleHints.innerHTML = `
+    <p class="sample-hints-title">先试试内置小图纸</p>
+    <div class="sample-hints-list">
+      ${patterns.map((pattern) => `
+        <button class="sample-chip" data-sample-id="${escapeAttribute(pattern.id)}" type="button">
+          <span class="sample-name">${escapeHtml(pattern.title)}</span>
+          <span class="sample-meta">${pattern.gridWidth}x${pattern.gridHeight}</span>
+        </button>
+      `).join("")}
+    </div>
+  `;
+
+  els.sampleHints.querySelectorAll("[data-sample-id]").forEach((button) => {
+    button.addEventListener("click", () => {
+      const pattern = (Core.LOCAL_LIBRARY_PATTERNS || []).find((item) => item.id === button.dataset.sampleId);
+      if (!pattern) return;
+      try {
+        const project = Core.createProjectFromLibraryPattern(pattern);
+        setProject(project, true);
+        switchView("editor");
+        setStatus(`已载入示例：${project.title}`);
+      } catch (error) {
+        setStatus(`示例载入失败：${error.message || "请换一张图纸"}`);
+      }
+    });
+  });
 }
 
 function renderSummary() {
   const project = state.currentProject;
-  els.summaryGrid.innerHTML = project.colorStats.map((stat) => `
-    <button class="summary-chip ${state.selectedColorId === stat.colorId ? "active" : ""}" data-color-id="${stat.colorId}" type="button">
-      <span class="swatch" style="background:${stat.hex}"></span>
-      <span class="summary-name">
-        <strong>${stat.colorId}</strong>
-        <span>${stat.shortId || stat.colorId}</span>
-      </span>
-      <span class="summary-count">x${stat.count}</span>
-    </button>
-  `).join("");
+  const query = (els.summarySearch.value || "").trim().toLowerCase();
+  const stats = query
+    ? project.colorStats.filter((stat) => `${stat.colorId} ${stat.shortId || ""}`.toLowerCase().includes(query))
+    : project.colorStats;
+
+  els.summaryGrid.innerHTML = stats.length
+    ? stats.map((stat) => `
+      <button class="summary-chip ${state.selectedColorId === stat.colorId ? "active" : ""}" data-color-id="${stat.colorId}" type="button">
+        <span class="swatch" style="background:${stat.hex}"></span>
+        <span class="summary-name">
+          <strong>${stat.colorId}</strong>
+          <span>${stat.shortId || stat.colorId}</span>
+        </span>
+        <span class="summary-count">x${stat.count}</span>
+      </button>
+    `).join("")
+    : '<div class="summary-empty">没有匹配的色号。</div>';
 
   els.summaryGrid.querySelectorAll("[data-color-id]").forEach((button) => {
     button.addEventListener("click", () => {
@@ -1227,8 +1428,10 @@ function getCanvasRenderWidth(canvas, options) {
   const compact = isCompactLayout();
   const inset = compact ? 24 : 36;
   const available = Math.max(280, canvas.parentElement.clientWidth - inset);
-  if (compact) return available;
-  return Math.max(options.desktopMin, Math.min(options.desktopMax, available));
+  const viewportCap = Math.max(280, Math.round(window.innerHeight * 0.72));
+  const capped = Math.min(available, viewportCap);
+  if (compact) return capped;
+  return Math.max(options.desktopMin, Math.min(options.desktopMax, capped));
 }
 
 function scrollWorkspaceIntoView() {
@@ -1324,6 +1527,16 @@ function renderExportPanel(project) {
   els.exportGrid.innerHTML = `
     <article class="export-card featured">
       <div>
+        <strong>整图导出</strong>
+        <span>${project.gridWidth}x${project.gridHeight} · ${project.totalBeads} 颗 · 一张完整 PNG</span>
+      </div>
+      <div class="export-card-actions">
+        <button class="ghost-button" data-export-action="view" data-export-kind="full" type="button">查看</button>
+        <button class="dark-button" data-export-action="download" data-export-kind="full" type="button">下载</button>
+      </div>
+    </article>
+    <article class="export-card">
+      <div>
         <strong>色库清单</strong>
         <span>${project.colorStats.length} 个色号 · 汇总每种拼豆数量</span>
       </div>
@@ -1379,6 +1592,13 @@ function downloadCurrentExportView() {
 
 function downloadExportTarget(project, target, baseName) {
   const kind = target && target.kind;
+  if (kind === "full") {
+    Core.drawExportCanvas(els.workCanvas, project, {});
+    downloadCanvas(els.workCanvas, `${baseName}-整图.png`);
+    setStatus("已导出整图 PNG。");
+    return;
+  }
+
   if (kind === "summary") {
     Core.drawColorStatsCanvas(els.workCanvas, project);
     downloadCanvas(els.workCanvas, `${baseName}-色库清单.png`);
@@ -1400,6 +1620,13 @@ function downloadExportTarget(project, target, baseName) {
 function renderExportViewCanvas(project, target, canvas) {
   const pages = Core.getExportPages(project, EXPORT_BOARD_SIZE);
   const kind = target && target.kind ? target.kind : "summary";
+
+  if (kind === "full") {
+    Core.drawExportCanvas(canvas, project, {});
+    els.exportViewerTitle.textContent = "整图";
+    els.exportViewerMeta.textContent = `${project.gridWidth}x${project.gridHeight} · ${project.totalBeads} 颗`;
+    return;
+  }
 
   if (kind === "summary") {
     Core.drawColorStatsCanvas(canvas, project);
@@ -1424,6 +1651,11 @@ function renderExportViewCanvas(project, target, canvas) {
 }
 
 function downloadCanvas(canvas, fileName) {
+  if (window.PinBead && window.PinBead.saveFile) {
+    window.PinBead.saveFile(canvas.toDataURL("image/png"), fileName);
+    return;
+  }
+
   const link = document.createElement("a");
   link.download = fileName;
   link.href = canvas.toDataURL("image/png");
@@ -1438,6 +1670,11 @@ async function shareApp() {
     text: "一个本地生成拼豆图纸的小工具，图片不上传服务器。",
     url: window.location.href
   };
+
+  if (window.PinBead && window.PinBead.share) {
+    window.PinBead.share(shareData.title, `${shareData.text}\n${shareData.url}`);
+    return;
+  }
 
   if (navigator.share) {
     try {
